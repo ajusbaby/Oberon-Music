@@ -1,0 +1,2763 @@
+/* =========================================================================
+ * views.css —— 音乐库 / 专辑 / 艺术家 / 搜索 / 播放列表 / 设置 视图样式
+ * 设计语言与 design.css 保持一致：同一套颜色令牌、圆角、磨砂玻璃与过渡曲线
+ * ========================================================================= */
+
+/* ===== 视图页头 ===== */
+.view-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 22px;
+    flex-shrink: 0;
+}
+
+.view-header-main {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.view-title {
+    font-size: 30px;
+    font-weight: 650;
+    letter-spacing: -0.4px;
+    line-height: 1.2;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.view-sub {
+    font-size: 14px;
+    color: #777777;
+    margin-top: 4px;
+    letter-spacing: -0.1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.view-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+/* ===== 按钮 ===== */
+.pill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 38px;
+    padding: 0 18px;
+    border: none;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 550;
+    letter-spacing: -0.1px;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+}
+
+.pill-btn:hover {
+    background: var(--color-active);
+}
+
+.pill-btn:active {
+    transform: scale(0.97);
+}
+
+.pill-btn svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+.pill-btn.primary {
+    background: var(--color-text-primary);
+    color: #fff;
+}
+
+.pill-btn.primary:hover {
+    background: #000;
+}
+
+.pill-btn.danger {
+    background: rgba(232, 17, 35, 0.1);
+    color: #C81E2B;
+}
+
+.pill-btn.danger:hover {
+    background: rgba(232, 17, 35, 0.18);
+}
+
+.pill-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.icon-only-btn {
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    flex-shrink: 0;
+}
+
+.icon-only-btn:hover {
+    background: var(--color-hover);
+    color: var(--color-text-primary);
+}
+
+.icon-only-btn svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+/* 已收藏的心形按钮：与播放条 .favorite-btn.favorited 同一个红（design.css 里那个值）。
+   少了它，曲目行上就分不出「这首已经收藏了」，收藏模块里更是一片没状态的心形。 */
+.icon-only-btn.favorited,
+.icon-only-btn.favorited:hover {
+    color: #E0245E;
+}
+
+.back-btn {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: none;
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    flex-shrink: 0;
+}
+
+.back-btn:hover {
+    background: var(--color-active);
+}
+
+.back-btn svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+/* ===== 分页签（歌曲 / 专辑 / 艺术家） ===== */
+.chip:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* 设置项标题后面的小标记（如"需先开启低功耗"） */
+.settings-badge {
+    margin-left: 8px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-tertiary);
+    background: var(--color-surface-secondary);
+}
+
+.chip-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    margin-bottom: 16px;
+}
+
+.chip {
+    height: 32px;
+    padding: 0 16px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: var(--color-surface-secondary);
+    color: var(--color-text-secondary);
+    font-family: inherit;
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.chip:hover {
+    background: var(--color-active);
+    color: var(--color-text-primary);
+}
+
+.chip.active {
+    background: var(--color-text-primary);
+    color: #fff;
+}
+
+/* ===== 列表容器（虚拟滚动视口） ===== */
+.list-viewport {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    margin: 0 -8px;
+    padding: 0 8px;
+}
+
+.list-inner {
+    position: relative;
+    width: 100%;
+}
+
+/* ===== 曲目行 ===== */
+.track-list-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 34px;
+    padding: 0 14px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    color: var(--color-text-tertiary);
+    border-bottom: 1px solid var(--color-divider);
+}
+
+.track-list-head .col-idx {
+    width: 26px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.track-list-head .col-title {
+    flex: 1;
+    min-width: 0;
+}
+
+.track-list-head .col-album {
+    width: 180px;
+    flex-shrink: 0;
+}
+
+.track-list-head .col-dur {
+    width: 56px;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.sortable {
+    cursor: pointer;
+    user-select: none;
+    transition: color var(--transition-fast);
+}
+
+.sortable:hover {
+    color: var(--color-text-secondary);
+}
+
+.track-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 56px;
+    padding: 0 14px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    position: absolute;
+    left: 0;
+    right: 0;
+}
+
+.track-row:hover {
+    background: rgba(255, 255, 255, 0.85);
+}
+
+.track-row.playing {
+    background: rgba(255, 255, 255, 0.85);
+}
+
+.track-row.playing .track-title {
+    color: #B4632A;
+}
+
+.track-index {
+    width: 26px;
+    flex-shrink: 0;
+    text-align: right;
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+}
+
+.track-cover {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 17px;
+    color: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+    background-size: cover;
+    background-position: center;
+}
+
+.track-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.track-head {
+    flex: 1;
+    min-width: 0;
+}
+
+.track-title {
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--color-text-primary);
+    letter-spacing: -0.1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-sub {
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-album {
+    width: 180px;
+    flex-shrink: 0;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-dur {
+    width: 56px;
+    flex-shrink: 0;
+    text-align: right;
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+}
+
+.track-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+/* 隐藏的是每个按钮而不是整块：这样已收藏的红心可以常亮，其余按钮仍只在悬停时出现 */
+.track-actions .icon-only-btn {
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+}
+
+.track-row:hover .track-actions .icon-only-btn {
+    opacity: 1;
+}
+
+/* 已收藏：不悬停也把红心点亮 */
+.track-actions .icon-only-btn.favorited {
+    opacity: 1;
+}
+
+/* ===== 专辑网格 ===== */
+.album-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+    gap: 22px 18px;
+    padding-bottom: 8px;
+}
+
+.album-card {
+    cursor: pointer;
+    transition: transform var(--transition-normal);
+}
+
+.album-card:hover {
+    transform: translateY(-4px);
+}
+
+.album-cover {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    background-size: cover;
+    background-position: center;
+    box-shadow: var(--shadow-card);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 34px;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.album-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.album-cover-play {
+    position: absolute;
+    right: 10px;
+    bottom: 10px;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: none;
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--color-text-primary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    transform: translateY(6px);
+    transition: all var(--transition-normal);
+}
+
+.album-card:hover .album-cover-play {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.album-cover-play svg {
+    width: 18px;
+    height: 18px;
+    fill: currentColor;
+}
+
+.album-name {
+    margin-top: 10px;
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--color-text-primary);
+    letter-spacing: -0.1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.album-artist {
+    margin-top: 2px;
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ===== 专辑 / 播放列表 详情头（大封面） ===== */
+.detail-header {
+    display: flex;
+    align-items: flex-end;
+    gap: 22px;
+    margin-bottom: 24px;
+    flex-shrink: 0;
+}
+
+.detail-cover {
+    width: 156px;
+    height: 156px;
+    border-radius: var(--radius-lg);
+    flex-shrink: 0;
+    background-size: cover;
+    background-position: center;
+    box-shadow: var(--shadow-panel);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 46px;
+    color: rgba(255, 255, 255, 0.9);
+    overflow: hidden;
+}
+
+.detail-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.detail-info {
+    min-width: 0;
+    flex: 1;
+    padding-bottom: 4px;
+}
+
+.detail-kicker {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: var(--color-text-tertiary);
+    margin-bottom: 8px;
+}
+
+.detail-title {
+    font-size: 32px;
+    font-weight: 680;
+    letter-spacing: -0.6px;
+    line-height: 1.15;
+    color: var(--color-text-primary);
+    margin-bottom: 8px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.detail-meta {
+    font-size: 13.5px;
+    color: var(--color-text-secondary);
+    margin-bottom: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* ===== 艺术家列表 ===== */
+.artist-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    height: 64px;
+    padding: 0 14px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.artist-row:hover {
+    background: rgba(255, 255, 255, 0.85);
+}
+
+.artist-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 17px;
+    font-weight: 600;
+    color: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.artist-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 14.5px;
+    font-weight: 550;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.artist-count {
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+}
+
+/* ===== 分区标题 ===== */
+.section-title {
+    font-size: 15px;
+    font-weight: 620;
+    letter-spacing: -0.2px;
+    color: var(--color-text-primary);
+    margin: 26px 0 12px;
+    flex-shrink: 0;
+}
+
+.section-title:first-child {
+    margin-top: 0;
+}
+
+/* ===== 设置页 ===== */
+.settings-block {
+    background: var(--card-glass-bg);
+    /* ⚠️ 这里原来有两层 backdrop-filter: blur(20px) saturate(1.3)。设置页背后只有外壳的
+       **静态渐变**（颗粒已烘焙进背景），模糊一个静态渐变几乎看不出区别；但每个区块
+       进页面时都要重算一次模糊 —— 这是「进设置页瞬间功耗偏高」的主要来源之一。
+       实测：关掉前后像素差 mean ≈ 0.0x/255。 */
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: 6px 18px;
+    margin-bottom: 18px;
+    flex-shrink: 0;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--color-divider);
+}
+
+.settings-row:last-child {
+    border-bottom: none;
+}
+
+.settings-row-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.settings-label {
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--color-text-primary);
+}
+
+.settings-hint {
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.settings-value {
+    font-size: 13.5px;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+}
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 14px;
+    margin-bottom: 20px;
+    flex-shrink: 0;
+}
+
+.stat-card {
+    background: var(--card-glass-bg);
+    /* ⚠️ 这里原来有两层 backdrop-filter: blur(20px) saturate(1.3)。设置页背后只有外壳的
+       **静态渐变**（颗粒已烘焙进背景），模糊一个静态渐变几乎看不出区别；但每个区块
+       进页面时都要重算一次模糊 —— 这是「进设置页瞬间功耗偏高」的主要来源之一。
+       实测：关掉前后像素差 mean ≈ 0.0x/255。 */
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    padding: 16px 18px;
+}
+
+.stat-value {
+    font-size: 24px;
+    font-weight: 640;
+    letter-spacing: -0.5px;
+    color: var(--color-text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+}
+
+/* ===== 扫描进度横幅 ===== */
+.scan-banner {
+    position: absolute;
+    top: 78px;
+    left: 34px;
+    right: 34px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    border-radius: var(--radius-lg);
+    background: rgba(255, 255, 255, 0.78);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    box-shadow: var(--shadow-panel);
+    animation: fadeInUp 200ms ease-out;
+}
+
+.scan-text {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.scan-track {
+    width: 140px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--color-active);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.scan-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--color-text-primary);
+    transition: width var(--transition-medium);
+}
+
+/* ===== 吐司 ===== */
+.toast-wrap {
+    position: fixed;
+    bottom: calc(var(--player-height) + 20px);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    z-index: 200;
+    pointer-events: none;
+}
+
+.toast {
+    padding: 10px 18px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    background: rgba(255, 255, 255, 0.86);
+    backdrop-filter: blur(24px) saturate(1.4);
+    -webkit-backdrop-filter: blur(24px) saturate(1.4);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: var(--shadow-panel);
+    animation: fadeInUp 200ms ease-out;
+    pointer-events: auto;
+    max-width: 560px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.toast.error {
+    color: #C81E2B;
+}
+
+/* ===== 右键/更多 菜单 ===== */
+.context-menu {
+    position: fixed;
+    min-width: 190px;
+    padding: 6px;
+    z-index: 300;
+    background: rgba(255, 255, 255, 0.82);
+    backdrop-filter: blur(28px) saturate(1.5);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-panel);
+    animation: fadeIn 140ms ease-out;
+}
+
+.context-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 13.5px;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    white-space: nowrap;
+}
+
+.context-item:hover {
+    background: var(--color-hover);
+}
+
+.context-item.danger {
+    color: #C81E2B;
+}
+
+.context-item svg {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+    flex-shrink: 0;
+}
+
+/* ===== 空状态 ===== */
+.empty-state {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    text-align: center;
+    color: var(--color-text-tertiary);
+    min-height: 200px;
+}
+
+.empty-state-icon {
+    font-size: 40px;
+    color: var(--color-text-tertiary);
+    opacity: 0.7;
+    margin-bottom: 6px;
+}
+
+.empty-state-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+}
+
+.empty-state-sub {
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+}
+
+/* ===== 加载态 ===== */
+.spinner {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--color-active);
+    border-top-color: var(--color-text-secondary);
+    animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.loading-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 40px 0;
+    color: var(--color-text-tertiary);
+    font-size: 13px;
+}
+
+/* 详情页内的滚动区（列表在最下方） */
+.detail-body {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 视图根容器：撑满主内容并允许内部滚动 */
+.view-root {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+/* ===== 侧边栏播放列表项 ===== */
+.playlist-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 4px;
+    overflow-y: auto;
+    flex: 1;
+    min-height: 0;
+    scrollbar-width: none;
+}
+
+.playlist-item {
+    height: 42px;
+    font-size: 14px;
+    font-weight: 450;
+    gap: 10px;
+}
+
+
+.playlist-name {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.playlist-count {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.settings-btn.active {
+    background: var(--color-hover);
+    color: var(--color-text-primary);
+}
+
+/* ===== 播放栏补充（重复单曲角标 / 封面图 / 队列条目） ===== */
+.repeat-one-badge {
+    position: absolute;
+    margin: -12px 0 0 12px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text-primary);
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 4px;
+    padding: 1px 3px;
+}
+
+.ctrl-btn {
+    position: relative;
+}
+
+.player-track-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+    display: block;
+}
+
+.player-track-glyph {
+    font-size: 20px;
+    color: rgba(255, 255, 255, 0.92);
+}
+
+.queue-item-active {
+    background: rgba(255, 255, 255, 0.55);
+}
+
+.queue-item-dur {
+    font-size: 11.5px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.queue-empty {
+    padding: 18px 12px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+}
+
+/* ===== 首页提示 / 列表提示 ===== */
+.home-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 14px;
+    font-size: 12.5px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+}
+
+.home-hint svg {
+    fill: var(--color-text-tertiary);
+    transform: rotate(180deg);
+}
+
+.list-note {
+    font-size: 12.5px;
+    color: var(--color-text-tertiary);
+    padding: 0 4px 8px;
+    flex-shrink: 0;
+}
+
+.tiny-arrow {
+    font-size: 13px;
+    line-height: 1;
+    color: currentColor;
+}
+
+.meta-link {
+    cursor: pointer;
+}
+
+.meta-link:hover {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+}
+
+.artist-cover {
+    font-size: 52px;
+    font-weight: 600;
+}
+
+.album-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-shrink: 0;
+}
+
+.search-track-block {
+    display: flex;
+    flex-direction: column;
+    max-height: 380px;
+    min-height: 120px;
+}
+
+.settings-path {
+    font-size: 13px;
+    font-weight: 500;
+    word-break: break-all;
+    white-space: normal;
+}
+
+/* ===== 弹窗卡片：实心材质（按需求去掉玻璃感）=====
+   设计稿的 .dialog 是 rgba(255,255,255,.7) + blur(28px)：卡片本身半透明，背后的专辑封面 /
+   氛围背景会直接透上来，文字对比度随背后画面忽高忽低（截图里能看到封面从卡片里透出来）。
+   现在改成「不透明表面 + 描边 + 投影」：新建播放列表 / 重命名 / 添加到歌单 / 添加歌曲 /
+   确认删除 五张卡片共用这套样式，一起换才不会一半实心一半玻璃。
+   卡片内部的输入框、列表、次要按钮原本也是半透明白，压在实心白卡上等于"消失"，
+   所以一并换成实心灰阶。⚠️ .dialog-overlay（遮罩）保持原样 —— 它本来就该是压暗 + 虚化。 */
+.dialog {
+    background: var(--color-surface);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border: 1px solid var(--color-border);
+    box-shadow:
+        0 24px 70px rgba(0, 0, 0, 0.24),
+        0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.dialog-input {
+    background: var(--color-surface-secondary);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.dialog-input:focus {
+    background: var(--color-surface);
+    border-color: rgba(0, 0, 0, 0.22);
+}
+
+.dialog-btn.cancel {
+    background: var(--color-surface-secondary);
+}
+
+.dialog-btn.cancel:hover {
+    background: var(--color-active);
+    color: var(--color-text-primary);
+}
+
+.dialog-list,
+.dialog-track-list {
+    background: var(--color-surface-secondary);
+    border-color: var(--color-border);
+}
+
+.dialog-list-item:hover,
+.dialog-track:hover {
+    background: var(--color-active);
+}
+
+.dialog-track.checked {
+    background: var(--color-surface);
+    box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+/* ===== 对话框补充 ===== */
+.dialog-message {
+    font-size: 14px;
+    line-height: 1.55;
+    color: var(--color-text-secondary);
+    margin: 6px 0 22px;
+}
+
+.dialog-list {
+    max-height: 260px;
+    overflow-y: auto;
+    margin: 6px 0 18px;
+    padding: 4px;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.dialog-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 42px;
+    padding: 0 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.dialog-list-item:hover {
+    background: rgba(255, 255, 255, 0.75);
+}
+
+.dialog-list-item svg {
+    fill: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.dialog-list-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dialog-list-count {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+}
+
+.dialog-empty {
+    padding: 22px 12px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--color-text-tertiary);
+}
+
+.dialog-track-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin: 4px 0 18px;
+    padding: 4px;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.4);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.dialog-track {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.dialog-track:hover {
+    background: rgba(255, 255, 255, 0.7);
+}
+
+.dialog-track.checked {
+    background: rgba(255, 255, 255, 0.85);
+}
+
+.dialog-check {
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    border: 1.5px solid rgba(0, 0, 0, 0.18);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    background: transparent;
+}
+
+.dialog-check.on {
+    background: var(--color-text-primary);
+    border-color: var(--color-text-primary);
+}
+
+.dialog-check.on svg {
+    fill: #fff;
+}
+
+.dialog-track-cover {
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.9);
+    overflow: hidden;
+}
+
+.dialog-track-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.dialog-track-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dialog-track-artist {
+    width: 120px;
+    flex-shrink: 0;
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dialog-track-dur {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+/* 设置页滑杆宽度 */
+.settings-row .volume-slider {
+    width: 160px;
+    flex-shrink: 0;
+}
+
+
+/* ===== 封面完整显示（用户要求：卡片上的封面必须完整、与内嵌原图一致）===== */
+/* 设计稿的 .cf-cover 是「卡片宽 - 20px」的正方形区域，但没有给内部 <img> 指定尺寸：
+   内嵌封面通常是 800~3000px 的方图，直接放进 204×204 的 overflow:hidden 框里
+   只能看到中间一小块。这里补齐尺寸并统一 contain，保证整张封面可见。 */
+.cf-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+.queue-item-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+}
+
+/* 小尺寸封面（列表缩略图）保持方形填满，避免出现细边 */
+.track-cover img,
+.dialog-track-cover img {
+    object-fit: contain;
+}
+
+
+/* 未载入曲目时的进度条：置灰且不可拖动 */
+.progress-area.idle {
+    opacity: 0.55;
+}
+
+.progress-slider.idle {
+    pointer-events: none;
+}
+
+/* ===== 设置页：音乐文件夹（长条） ===== */
+.folder-strip {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 56px;
+    padding: 0 12px 0 10px;
+    margin: 8px 0;
+    border-radius: var(--radius-md);
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    transition: background var(--transition-fast);
+}
+
+.folder-strip:hover {
+    background: rgba(255, 255, 255, 0.92);
+}
+
+.folder-strip-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.05);
+    display: grid;
+    place-items: center;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.folder-strip-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 13.5px;
+    font-weight: 550;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.folder-strip-meta {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    white-space: nowrap;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.folder-strip .pill-btn {
+    flex-shrink: 0;
+}
+
+
+/* ===== 卡片文字清晰度（125% 缩放下尤其明显）===== */
+/* 原因：.cf-card 带 backdrop-filter 且处于 3D 变换中，Chromium 会为它建立独立的
+   backdrop 渲染表面，文字按变换前的分辨率栅格化后再被放大/重采样，于是发虚。
+   处理：卡片不再使用 backdrop-filter（玻璃感由半透明背景与描边保留），
+   并把文字层单独提升，使其按最终显示比例栅格化。 */
+.cf-card {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.cf-meta {
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+.cf-meta h3,
+.cf-meta p {
+    -webkit-font-smoothing: antialiased;
+}
+
+
+/* ===== 封面流自适应舞台（全屏/大窗口下整体放大）===== */
+/* .cf-perspective 保持设计稿的 920×330 基准尺寸，由外层按可用空间缩放，
+   内部 X/缩放/景深等常量因此完全不受影响。 */
+.cf-stage {
+    position: relative;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+}
+
+.cf-stage > .cf-perspective {
+    flex: 0 0 auto;
+}
+
+
+/* ===== 对话框遮罩圆角 ===== */
+/* .dialog-overlay 是 position: fixed，会脱离 .app-shell 的 overflow 裁剪，
+   于是遮罩仍然铺满矩形窗口，窗口四角露出方形暗边（看起来像多余阴影）。
+   这里补上与外壳一致的圆角。 */
+.dialog-overlay {
+    border-radius: var(--app-radius);
+}
+
+.app-shell.maximized .dialog-overlay {
+    border-radius: 0;
+}
+
+
+/* ===== 卡片标题过长时循环滚动 ===== */
+/* 设计稿是单行省略号；超长名字改成跑马灯：内容复制一份，
+   整体左移 50% 后无缝接回（两份宽度相同，因此循环无跳变）。 */
+.cf-meta .marquee-track {
+    display: inline-flex;
+    align-items: baseline;
+}
+
+.cf-meta .marquee .marquee-track {
+    /* ⚠️ 这里原来是一条 animation: cf-marquee ... linear infinite。
+       CSS 无限动画由合成器按刷新率跑（120/144/180Hz 就是那么多次/秒），绕过帧预算；
+       而卡片标题/艺术家的长度**逐首不同** —— 这就是「有的歌 4%、有的 7%」的来源。
+       现在只保留定位，滚动交给 Coverflow 里那条受控 rAF（60fps，且失焦/被盖住即停）。
+       副作用：两侧卡片的长标题不再滚动（它们本来就缩小+压暗，静止更干净）。 */
+    transform: none;
+}
+
+.cf-meta .marquee .marquee-track > span {
+    white-space: nowrap;
+    padding-right: 36px;
+}
+
+.cf-meta .marquee {
+    text-overflow: clip;
+}
+
+@keyframes cf-marquee {
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(-50%);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cf-meta .marquee .marquee-track {
+        animation: none;
+    }
+}
+
+
+
+/* ===== 详情页操作行：按钮较多时换行，避免最后一个按钮被挤出可视区 ===== */
+/* 播放列表详情有 5 个操作（播放/随机/添加/重命名/删除）+ 返回，
+   一行放不下（约 593px > 可用 565px），删除按钮会被裁掉。 */
+.detail-actions {
+    flex-wrap: wrap;
+    row-gap: 10px;
+}
+
+/* ===== 侧栏播放列表：悬停显示删除按钮 ===== */
+.playlist-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.playlist-row .playlist-item {
+    flex: 1;
+    min-width: 0;
+    padding-right: 34px;
+}
+
+.playlist-del-btn {
+    position: absolute;
+    right: 6px;
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-text-tertiary);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.playlist-del-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.playlist-row:hover .playlist-del-btn,
+.playlist-del-btn:focus-visible {
+    opacity: 1;
+}
+
+.playlist-del-btn:hover {
+    background: rgba(232, 17, 35, 0.12);
+    color: #C81E2B;
+}
+
+/* 删除按钮显示时隐藏歌曲数，避免重叠 */
+.playlist-row:hover .playlist-count {
+    opacity: 0;
+}
+
+
+/* ===== 播放条图标尺寸 ===== */
+/* 播放/上一首/下一首：设计稿 18/22px 基础上净放大 20%（曾试 50%，偏大已回调） */
+.player-controls .ctrl-btn:not(.mode-btn) svg {
+    width: 21.6px;
+    height: 21.6px;
+}
+
+.player-controls .ctrl-btn.play-btn svg {
+    width: 26.4px;
+    height: 26.4px;
+}
+
+/* 播放模式（单曲循环 / 随机）按钮：回到设计稿原始尺寸 */
+.player-controls .mode-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* ===== 通用次要按钮（此前只有 .chip，.btn 一直没样式）===== */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+    font-family: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.btn:hover:not(:disabled) {
+    background: var(--color-active);
+}
+
+.btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.btn svg {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+}
+
+/* ===== 设置：歌词字体（紧凑两槽位）===== */
+.lf-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--color-divider);
+}
+
+.lf-row:last-child,
+.lf-row-head {
+    border-bottom: 0;
+}
+
+.lf-row-head {
+    padding-bottom: 8px;
+}
+
+.lf-label {
+    flex: 0 0 68px;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+}
+
+.lf-hint {
+    font-size: 11.5px;
+    color: var(--color-text-tertiary);
+}
+
+/* 歌词字体块的块尾操作行：左侧状态文案、右侧保存按钮。
+   原来这一行夹在「粗细」和「预览」中间，左边还是个空标签 —— 在设置项网格里
+   看着像漏填了一项设置。挪到块尾、加一条分隔线，才是「这个块的操作」该在的位置。 */
+.lf-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--color-divider);
+}
+
+.lf-footer .lf-hint {
+    min-width: 0;
+}
+
+/* 沿用 .pill-btn 的观感，但比它紧凑一档：这是设置块内的动作，不该有主操作的体量 */
+.lf-save {
+    height: 34px;
+    padding: 0 16px;
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.lf-options {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+/* 每个语言槽一个下拉。语言从 2 个变成 4 个之后，chip 网格会挤爆，
+   而下拉的候选天然可以很长（内置 + 全部上传字体）。 */
+.lf-select {
+    flex: 0 0 auto;
+    min-width: 186px;
+    max-width: 268px;
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+    font-family: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.lf-select:hover {
+    background: var(--color-active);
+}
+
+/* 语言槽的样字：用该槽真实的字体栈渲染（见 SettingsView），所以它同时是一份"所见即所得"的检验 */
+.lf-slot-sample {
+    flex: 1;
+    min-width: 0;
+    margin-left: 4px;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 样张体检结论（读字体 cmap 得出的硬数据）：
+   缺字时把"缺几个"摆在选择旁边，避免选完才发现一行里两种字体。 */
+.lf-cover {
+    flex: 0 0 auto;
+    font-size: 11.5px;
+    color: var(--color-text-tertiary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.lf-cover.bad {
+    color: #b45309;
+}
+
+.lf-chip {
+    height: 28px;
+    padding: 0 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+}
+
+.lf-sample {
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0.9;
+}
+
+.lf-range {
+    flex: 1;
+    max-width: 200px;
+}
+
+.lf-value {
+    flex: 0 0 42px;
+    text-align: right;
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+/* 小尺寸 SVG 图标按钮（28×28，替代此前又大又没样式的文件夹按钮） */
+.lf-icon-btn {
+    flex: 0 0 auto;
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.lf-icon-btn svg {
+    width: 15px;
+    height: 15px;
+    fill: currentColor;
+}
+
+.lf-icon-btn:hover:not(:disabled) {
+    background: var(--color-active);
+    color: var(--color-text-primary);
+}
+
+.lf-icon-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.lf-preview-block {
+    padding-top: 12px;
+}
+
+/* 歌词预览：直接吃歌词页那三个 CSS 变量 */
+.lf-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 16px 18px;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #2b3037, #16181c 70%);
+    border: 1px solid var(--color-border);
+    overflow: hidden;
+}
+
+.lp-line {
+    margin: 0;
+    font-family: var(--lyric-font, inherit);
+    font-size: calc(19px * var(--lyric-size, 1));
+    font-weight: var(--lyric-weight, 420);
+    font-synthesis: weight;
+    color: rgba(255, 255, 255, 0.42);
+    line-height: 1.35;
+}
+
+.lp-active {
+    font-size: calc(31px * var(--lyric-size, 1));
+    font-weight: calc(var(--lyric-weight, 420) + 80);
+    color: rgba(255, 255, 255, 0.97);
+}
+
+
+/* ===== 亚克力磨砂材质（按用户给定范例实现）=====
+   范例的关键认知：**"厚度"不来自不透明度，而来自
+     ① 四边内侧高光（上强下弱）+ 外投影  ② 颗粒层（overlay）  ③ 表面斜向光泽带**
+   底色反而很透（范例 0.08~0.22 白）。这里逐层落到位：
+     - 磨砂核心：blur(16px) saturate(180%) brightness(1.06)（与范例一致）
+     - 底色：范例的 145deg 白渐变；本应用是浅色主题，再叠一层浅色基色保证深色正文可读
+     - 颗粒：feTurbulence 1.6 / 4 octaves / 灰度，120px 贴片，overlay
+     - 光泽：115deg 高光带 + 顶部柔光
+   不透明度按"太透明"的反馈上调：基色 0.82 → 0.90，合成白度约 0.92~0.95，
+   最坏情况（背后纯黑桌面）正文对比度相应提高到约 9:1（AA 需 4.5:1）。 */
+.app-shell {
+    /* ⚠️ 这里移除了**全窗 backdrop-filter**（原 blur(24px) saturate(180%) brightness(1.06)）：
+       外壳底色 96% 不透明，而它的背板是页面根（透明/看不见），
+       模糊一个看不见的背板 = 让合成器每帧白做一次全窗取回 + 三次滤镜。
+       亚克力的"厚度"仍由三层提供：145° 白渐变底 + 颗粒（background-blend-mode）+ ::after 光泽带。 */
+    background-image:
+        /* 颗粒：把原 ::before 的 opacity:.2 烘焙进 SVG（rect opacity='0.2'），
+           再用 background-blend-mode: overlay 与下面的渐变融合 ——
+           合成结果等价于"独立伪元素 + mix-blend-mode: overlay + opacity:.2"，
+           但它不再是需要逐帧重算的全窗混合层（下方光雾 30fps 变化时会持续触发重算）。 */
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.6' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.2'/%3E%3C/svg%3E"),
+        linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.52) 0%,
+            rgba(255, 255, 255, 0.34) 45%,
+            rgba(255, 255, 255, 0.44) 100%
+        );
+    background-color: rgba(247, 247, 249, 0.96);
+    background-size: 120px 120px, auto;
+    background-repeat: repeat, no-repeat;
+    background-blend-mode: overlay, normal;
+    /* 永久去掉白线与白描边：border 与 inset 四边高光在非白色背景上都会显成白边
+       （歌词页深色背景下尤其明显）。亚克力的"厚度"改由渐变底 + 颗粒 + 柔和内发光提供。 */
+    border: 0;
+    box-shadow:
+        0 12px 30px -24px rgba(0, 0, 0, 0.42),
+        inset 0 0 32px rgba(255, 255, 255, 0.14);
+    /* ⚠️ 必须显式声明层叠上下文：光雾（.home-ambient）用 z-index:-1 挂在「外壳底色之上、
+       所有内容之下」，这个位置依赖外壳自身是层叠上下文。
+       原先这上下文是 backdrop-filter 顺带给的，那层被优化掉之后只剩 clip-path 在撑；
+       而最大化/全屏会把 clip-path 撤掉（改直角）⇒ -1 逃出外壳、跑到 96% 不透明的底色后面
+       ⇒ 表现就是「全屏后首页没有 WebGL 背景」。isolation 只建上下文，无视觉/性能副作用。 */
+    isolation: isolate;
+    clip-path: inset(0 round var(--app-radius));
+}
+
+/* 颗粒层已并入 .app-shell 自身的 background（见上）：不再是一个全窗 mix-blend-mode 层。 */
+
+/* 表面光泽：斜向高光带 + 顶部柔光 */
+.app-shell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    clip-path: inset(0 round var(--app-radius));
+    pointer-events: none;
+    z-index: 2;
+    background:
+        linear-gradient(
+            115deg,
+            rgba(255, 255, 255, 0.26) 0%,
+            rgba(255, 255, 255, 0) 34%,
+            rgba(255, 255, 255, 0) 66%,
+            rgba(255, 255, 255, 0.14) 100%
+        ),
+        radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 62%);
+}
+
+/* 侧栏 / 搜索框：同一套亚克力语言，层次略低 */
+.sidebar {
+    /* 让首页氛围背景从侧栏下面透出来：降低不透明度 + 自身做一层毛玻璃。
+       之前 0.82 白几乎不透，在流动的背景旁边就是一块死板的灰板（"很突兀"）。 */
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0.16) 45%, rgba(255, 255, 255, 0.24) 100%),
+        rgba(250, 250, 252, 0.5);
+    /* 少一个 saturate pass：滤镜链每多一个函数就多一遍全区域采样。
+       饱和度补偿放到背景色本身（见上方的白渐变），观感差异用像素比对确认。 */
+    /* 注：试过去掉 saturate 省一个 pass，但在"彩色背板"（光雾）下无法用像素比对确认差异、
+       收益又小（侧栏约 0.2MP），为满足"观感零变化"这条硬要求而保留原样。 */
+    backdrop-filter: blur(20px) saturate(1.25);
+    -webkit-backdrop-filter: blur(20px) saturate(1.25);
+    border-right: 1px solid rgba(255, 255, 255, 0.36);
+}
+
+.search-bar {
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.3) 50%, rgba(255, 255, 255, 0.4) 100%),
+        rgba(242, 242, 245, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 0 18px rgba(255, 255, 255, 0.14);
+}
+
+/* 播放条：范围原本就是"卡片"，直接套用范例配方。
+   不透明度按"继续降低透明度（提高遮蔽度）"的要求上调：
+   底色 0.42 → 0.72，叠加斜坡后合成白度约 0.77~0.82（原先约 0.51~0.62），
+   背后来源基本被遮住，只留下磨砂颗粒与四边内侧高光维持材质厚度。 */
+.app-shell .bottom-player {
+    /* backdrop-filter 的背景快照不跟 border-radius 裁剪，会在窗口四角糊出方角，
+       必须在播放条本体上裁圆角（详见"圆角漏角修复"）。 */
+    clip-path: inset(
+        0 round var(--player-radius-top) var(--player-radius-top)
+        calc(var(--player-radius-bottom) - 1px) calc(var(--player-radius-bottom) - 1px)
+    );
+    /* 底色 76% 不透明 → 背板只占 24%，saturate/brightness 基本看不见，去掉省两个 pass */
+    /* 同上：保留 saturate/brightness（底色 76% 不透明，差异本就极小，但无法用像素比对坐实） */
+    backdrop-filter: blur(24px) saturate(180%) brightness(1.06);
+    -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(1.06);
+    /* 均匀底色（不能用 145deg 渐变：亮端会落在顶边形成一条亮线） */
+    background-color: rgba(255, 255, 255, 0.76);
+    background-image: none;
+    /* 永久去掉白线：不用 border（设计稿 .bottom-player 有一圈 border: 1px .35），
+       也不用 inset 内高光（inset 0 2px 0 .92 就是"顶上一条 2px 白线"，
+       inset ±2px 0 则是"两侧白线"，合起来就是用户看到的一圈白）。 */
+    border: 0;
+    box-shadow: 0 -14px 34px -18px rgba(0, 0, 0, 0.28);
+}
+
+
+
+/* 最大化/全屏时窗口本身是直角，圆角裁剪也要撤掉 */
+.app-shell.maximized,
+.app-shell.maximized::before,
+.app-shell.maximized::after {
+    clip-path: none;
+}
+
+/* 底栏在最大化/全屏下必须也是直角 —— 之前有两处漏网，左下/右下会留一对圆角：
+   ① design.css 的 `.app-shell.maximized .bottom-player` 只把 border-radius 归零，
+      而 views.css 里 `.app-shell > .bottom-player` 还有一条 clip-path 在裁圆角
+      —— 真正"画出"那对圆角的是 clip-path，不是 border-radius；
+   ② 歌词页那条 `.lyrics-page .lyrics-footer .bottom-player`（lyrics.css，特异性相同
+      但更晚加载）更是把 border-radius 又设回了 15/35px。
+   下面这条特异性 (0,4,0) 同时压过这两处。 */
+.app-shell.maximized .bottom-player,
+.app-shell.maximized .lyrics-page .lyrics-footer .bottom-player {
+    border-radius: 0;
+    clip-path: none;
+}
+
+
+/* ===== 歌词页打开时：外壳的亚克力白边要收掉 =====
+   外壳（.app-shell）的白色描边 + 四边内高光是亚克力"厚度"的来源，但在浅色主界面上几乎看不出；
+   一旦进入歌词页（深色背景 + 面板四周留 16px 边距），它们就变成窗口四周的一圈白线。
+   用 :has() 在歌词页存在时把这两项关掉，主界面不受影响。 */
+.app-shell:has(.lyrics-page) {
+    border-color: rgba(255, 255, 255, 0);
+    box-shadow: none;
+}
+
+/* ===== 首页氛围背景（WebGL）=====
+   挂在 .app-shell 内、z-index:-1：外壳带 backdrop-filter，按规范自身形成层叠上下文，
+   因此 -1 恰好落在「外壳底色之上、所有内容之下」。侧栏/卡片是 0.72~0.82 的半透明白，
+   会把光雾霜化，形成氛围而不是抢戏的花哨背景。
+   未启用/不支持 WebGL 时完全不挂 canvas（由组件控制），这里只管布局与过渡。 */
+.home-ambient {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 900ms ease;
+}
+
+.home-ambient.on {
+    opacity: 1;
+}
+
+/* 离开首页时只隐藏、不卸载：WebGL 上下文与调色板都留着，返回时无需重建。
+   用 visibility 而不是 display:none —— 后者会让尺寸量到 0x0。 */
+.home-ambient.hidden {
+    visibility: hidden;
+}
+
+.home-ambient canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    /* 柔光波形：整幅加极轻的模糊让光带更"柔"。
+       ⚠️ 这里的 saturate 不再降饱和 —— 着色器内部已经有 10% 的降饱和，
+       再加一层 0.9 会把封面取色洗成灰白，首页背景就"看不见"了。 */
+    filter: blur(0.6px) saturate(1.15);
+}
+
+/* WebGL 不可用时的静态兜底：同色系的柔和渐变 */
+.home-ambient.fallback {
+    background:
+        radial-gradient(60% 55% at 22% 28%, rgba(120, 150, 220, 0.5), transparent 70%),
+        radial-gradient(55% 50% at 78% 62%, rgba(215, 150, 190, 0.42), transparent 72%),
+        radial-gradient(70% 60% at 55% 90%, rgba(150, 205, 200, 0.35), transparent 74%),
+        #ececf2;
+}
+
+/* 设置页开关（首页氛围背景） */
+.switch {
+    position: relative;
+    width: 46px;
+    height: 26px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(120, 120, 128, 0.22);
+    cursor: pointer;
+    transition: background 220ms ease;
+    flex-shrink: 0;
+}
+
+.switch.on {
+    background: var(--color-accent, #1d1d1f);
+}
+
+.switch-knob {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.22);
+    transition: transform 220ms ease;
+}
+
+.switch.on .switch-knob {
+    transform: translateX(20px);
+}
+
+
+/* Home 页播放条：顶角改直角。
+   它上方紧贴内容面板，15px 圆角会让左上/右上各露出一个背景缺口（看起来"多了两个角"）。
+   歌词页底栏按需求仍是上 15px / 下 35px，由 .lyrics-footer .bottom-player 覆盖。 */
+.app-shell > .bottom-player {
+    border-radius: 0 0 var(--player-radius-bottom) var(--player-radius-bottom);
+    clip-path: inset(
+        0 round 0 0 calc(var(--player-radius-bottom) - 1px) calc(var(--player-radius-bottom) - 1px)
+    );
+}
+
+
+/* ===== 播放中：封面流中心卡片的边框高亮光效 =====
+   动画只跑 opacity（合成层，不用重绘 box-shadow），静态态本身就是一圈高亮边框。
+   取消播放时淡出（transition），不做突兀切换；reduced-motion 下只保留常亮。 */
+.cf-card.cf-active::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: inherit;
+    pointer-events: none;
+    /* 亮度由受控 rAF 写进来的 CSS 变量决定（见 Coverflow.tsx 的播放光晕 effect）：
+       不播放时是 0 —— 靠 transition 淡出；播放时逐帧写值 —— 由 transition:none 接管。 */
+    opacity: var(--cf-glow, 0);
+    transition: opacity 520ms ease;
+    box-shadow:
+        0 0 0 2px rgba(255, 255, 255, 0.92),
+        0 0 26px 5px rgba(255, 206, 128, 0.5),
+        0 0 62px 14px rgba(255, 178, 84, 0.26);
+}
+
+/* 这里原来是一条 animation: cf-playing-glow 3.4s ease-in-out infinite。
+   CSS 无限动画由**合成器按刷新率**驱动 —— 120/144/180Hz 屏上就是那么多次/秒，
+   完全绕过 lib/frameBudget.ts 的帧预算，是「播放中什么都没变、GPU 却一直忙」的主因之一。
+   现在改成**受控 rAF + CSS 变量**：观感不变（同样的 0.62 到 1 呼吸），帧率落到 60fps，
+   且失焦/隐藏时干脆不写值（= 不产帧）。 */
+.app-shell.playing .cf-card.cf-active::after {
+    transition: none; /* 逐帧写值期间不能带过渡，否则每帧都重启一次 520ms 过渡 */
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+    .app-shell.playing .cf-card.cf-active::after {
+        opacity: 0.85;
+    }
+}
+
+
+/* ===== 低功耗模式（设置页开关，默认关闭）=====
+   为什么是"减层 / 去动画 / 去实时模糊"，而不是"降分辨率"：
+   docs/低配机三问题-诊断与解决方案.md §4.6 的实测表明歌词页开销 ≈ 10 点固定 + 1.15 点/Mpx，
+   固定项来自「逐帧失效的大面积模糊/混合层 + 常驻提升层 + 跑满刷新率的 rAF」。
+   所以这里按收益从大到小处理，且全部只在 .app-shell.low-power 下生效 —— 关掉开关时视觉与现在完全一致。
+
+   ① 首页光雾（WebGL 全屏 30fps）直接不渲染（App.tsx 里 active 已带 !lowPower，这里兜底）
+   ② 歌词页背景不再 drift：drift 动画会让它上方所有 mix-blend-mode / backdrop-filter 每帧失效重算
+   ③ 去掉两层全窗混合（.bg-tint 的 screen、.grain 的 soft-light）与常驻 will-change 提升层
+   ④ 毛玻璃 → 实色：backdrop-filter 是"每帧重算"的大项（底栏 120px 全宽 + .glass 卡片）
+   ⑤ 歌词逐行渐进模糊（约 55 个滤镜表面→内联 filter，必须 !important 才能盖掉）关闭
+   ⑥ 首页卡片不再常驻提升层；播放中光晕动画停止
+   ⑦ 歌词页打开时，被完全遮住的主界面停止绘制（visibility 而非 display：保留布局，避免关页时跳版） */
+/* 外壳与侧栏的全窗口 backdrop-filter：它模糊的是"窗口背后的桌面"，而外壳底色约 98% 不透明
+   —— 视觉上只透过去 2%，几乎看不出来，但每次失效都要对整窗做一次高斯模糊。
+   首页那 ~11 点里的大头就是它（实测：关掉后首页从 11 点降到个位数）。 */
+.app-shell.low-power {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.app-shell.low-power .sidebar {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.app-shell.low-power .home-ambient {
+    display: none;
+}
+
+.app-shell.low-power .lyrics-page .bg {
+    animation: none;
+    filter: blur(18px) saturate(1.04) brightness(0.8);
+}
+
+.app-shell.low-power .lyrics-page .bg-tint,
+.app-shell.low-power .lyrics-page .grain {
+    display: none;
+}
+
+.app-shell.low-power .lyrics-page .ambient {
+    animation: none;
+}
+
+.app-shell.low-power .lyrics-page .lyrics-scrim,
+.app-shell.low-power .lyrics-page .player {
+    will-change: auto;
+}
+
+.app-shell.low-power .lyrics-page .glass {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+/* ===== 低功耗模式的歌词页：白底黑字 + 左海报 / 右歌词 =====
+   不再使用封面虚化背景，因此也不需要深色页面上那套白字与暖色光晕；
+   底栏播放条同色系（白底 + 深色控件），避免"固定黑条 + 鲜艳封面"的突兀感。 */
+.app-shell.low-power .lyrics-page .player,
+.app-shell.low-power .lyrics-page .lyrics-scrim,
+.app-shell.low-power .lyrics-page .lyrics-veil {
+    background: #FFFFFF;
+}
+
+/* 低功耗的歌词页是"实色底"，不需要设计稿那圈白色描边（白底上看不见，进了夜间配色就是白边） */
+.app-shell.low-power .lyrics-page .player {
+    border: 0;
+}
+
+.app-shell.low-power .lyrics-page .bg,
+.app-shell.low-power .lyrics-page .bg-tint,
+.app-shell.low-power .lyrics-page .ambient,
+.app-shell.low-power .lyrics-page .vignette,
+.app-shell.low-power .lyrics-page .grain {
+    display: none;
+}
+
+.app-shell.low-power .lyrics-page .topbar {
+    left: 40px;
+    right: 40px;
+    top: 30px;
+}
+
+/* 顶栏只留返回按钮：封面/歌名已挪到左侧海报（两种模式一致）；「沉浸」只在低功耗下隐藏 */
+.app-shell .lyrics-page .track-pill {
+    background: none;
+    border: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: 0;
+}
+
+.app-shell .lyrics-page .track-pill .cover-mini,
+.app-shell .lyrics-page .track-pill .track-meta {
+    display: none;
+}
+
+.app-shell.low-power .lyrics-page .top-actions {
+    display: none;
+}
+
+.app-shell.low-power .lyrics-page .back {
+    color: var(--color-text-primary);
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.app-shell.low-power .lyrics-page .back:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.app-shell .lyrics-page .lp-poster {
+    position: absolute;
+    left: 7%;
+    top: 50%;
+    width: min(32vw, 400px);
+    transform: translateY(-50%);
+    z-index: 5;
+}
+
+.app-shell .lyrics-page .lp-poster-cover {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: 35px;
+    overflow: hidden;
+    /* ⚠️ 容器**不要**铺浅色底（#F2F2F5）。圆角裁剪是抗锯齿的，容器底色会沿着边缘漏出
+       一条 1px 亮线 —— 在深色歌词页上就是用户看到的"封面一圈白边"（左侧直边 + 圆角弧线上
+       都有）。实测：加背景时该线可见，去掉后完全消失。占位底色只留给没有封面的情况。 */
+    background: transparent;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.16);
+    display: grid;
+    place-items: center;
+}
+
+/* 没有封面时才铺占位底色（配合 ♪ 占位字形）。
+   ⚠️ 底色要分模式：默认歌词页是深色，铺 --color-surface-secondary(#F2F2F5) 会是一块刺眼的白方块；
+   浅灰只适合低功耗的白色页面（夜间低功耗那条在 .theme-dark 段里另有覆盖）。 */
+.app-shell .lyrics-page .lp-poster-cover.is-empty {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.app-shell.low-power .lyrics-page .lp-poster-cover.is-empty {
+    background: var(--color-surface-secondary);
+}
+
+.app-shell .lyrics-page .lp-poster-cover img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    /* 圆角直接落在图片自己身上：这样即使容器的裁剪边缘有抗锯齿像素，也没有底色可漏 */
+    border-radius: inherit;
+}
+
+.app-shell .lyrics-page .lp-poster-glyph {
+    font-size: 46px;
+    color: var(--color-text-tertiary);
+}
+
+.app-shell .lyrics-page .lp-poster-title {
+    margin-top: 22px;
+    font-size: 22px;
+    font-weight: 650;
+    letter-spacing: -0.3px;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.app-shell .lyrics-page .lp-poster-artist {
+    margin-top: 6px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.55);
+}
+
+.app-shell.low-power .lyrics-page .lp-poster-title { color: var(--color-text-primary); }
+.app-shell.low-power .lyrics-page .lp-poster-artist { color: var(--color-text-tertiary); }
+
+/* 歌词列：占满右侧剩余宽度、**全部左对齐**（默认模式是居中排版，直接继承会"组内居中 + 大片空白"），
+   长行改换行而不是被裁掉（wrap 比跑马灯便宜得多，也不会让几十行同时动起来）。 */
+.app-shell .lyrics-page .lyrics-area {
+    left: 52%;
+    right: 5%;
+    justify-content: flex-start;
+}
+
+.app-shell .lyrics-page .lyrics {
+    width: 100%;
+    text-align: left;
+    justify-content: flex-start;
+}
+
+.app-shell .lyrics-page .lyrics-track {
+    align-items: flex-start;
+    width: 100%;
+}
+
+.app-shell .lyrics-page .lyric-group {
+    align-items: flex-start;
+    text-align: left;
+    width: 100%;
+}
+
+/* 排版（宽度 / 换行 / 左对齐 / 字号）两种模式共用：默认那档字号在宽窗口里每行只占一半宽度，
+   右侧空一大片，所以统一放大到 21~34px；颜色仍按模式分别定义。 */
+.app-shell .lyrics-page .line {
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
+    font-size: calc(clamp(21px, 1.95vw, 34px) * var(--lyric-size, 1));
+    /* 显式再声明一次字体族：这条规则的特异性比设计稿的 `.lyrics-page .line` 高，
+       把 --lyric-font（内联设在歌词页根上：英文字体在前、中文字体在后）原样带上，
+       确保"我的排版覆盖"不会以任何方式洗掉用户设置的字体。 */
+    font-family: var(--lyric-font, inherit);
+}
+
+.app-shell .lyrics-page .lyric-group.active .line.active {
+    font-size: calc(clamp(34px, 3vw, 52px) * var(--lyric-size, 1));
+}
+
+/* ===== 歌词页布局切换（右上角按钮）=====
+   默认（无 .layout-center）= 现在的「左封面 + 右歌词」；.layout-center = 设计稿原来的
+   「无封面 + 歌词居中」。两者共用 .lyrics-area（inset:0），切换时只改 left/right 与对齐，
+   所以下面这几条是对上面那组"海报版排版"的覆盖（特异性更高、位置更靠后）。 */
+.app-shell .lyrics-page .top-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* 单独一颗的布局按钮：尺寸/材质对齐隔壁那颗 .icon-btn，但不带它"组内分隔线"的设定 */
+.app-shell .lyrics-page .layout-btn {
+    width: 46px;
+    height: 46px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    color: rgba(255, 255, 255, 0.88);
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.app-shell .lyrics-page .layout-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+/* 过场：只动 opacity / transform（合成层属性）。这里**不能**去过渡 left/right ——
+   那会让整列歌词逐帧重新换行，几十行同排的代价很高。 */
+.app-shell .lyrics-page .lyrics-area,
+.app-shell .lyrics-page .lp-poster {
+    transition: opacity 200ms ease, transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* 切换中（默认模式）：歌词与海报一起淡出，等 JS 换完布局再淡回 */
+.app-shell .lyrics-page.switching .lyrics-area {
+    opacity: 0;
+    transition-duration: 130ms;
+}
+
+.app-shell .lyrics-page.switching .lp-poster {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-26px) scale(0.97);
+    transition-duration: 130ms;
+}
+
+/* 居中版：海报退场（保留在 DOM 里只做淡出，不 display:none，才能有过渡） */
+.app-shell .lyrics-page.layout-center .lp-poster {
+    opacity: 0;
+    transform: translateY(-50%) translateX(-26px) scale(0.97);
+    pointer-events: none;
+}
+
+.app-shell .lyrics-page.layout-center .lyrics-area {
+    left: 0;
+    right: 0;
+    justify-content: center;
+}
+
+.app-shell .lyrics-page.layout-center .lyrics {
+    width: min(780px, 72vw);
+    text-align: center;
+    justify-content: center;
+}
+
+.app-shell .lyrics-page.layout-center .lyrics-track {
+    align-items: center;
+    width: auto;
+}
+
+.app-shell .lyrics-page.layout-center .lyric-group {
+    align-items: center;
+    text-align: center;
+    width: auto;
+}
+
+/* 长句仍然换行：设计稿的 white-space:nowrap 会把长句裁掉，这里保留"换行"这条改进 */
+.app-shell .lyrics-page.layout-center .line {
+    max-width: 730px;
+    text-align: center;
+}
+
+/* 低功耗：入场也不做分层错峰动画 —— 那三层各是一次"大半窗的合成动画"，
+   与整体的 opacity 淡入叠加后仍是额外开销。低功耗只保留一次整体淡入。 */
+.app-shell.low-power .lyrics-page.staged .topbar,
+.app-shell.low-power .lyrics-page.staged .lyrics-area,
+.app-shell.low-power .lyrics-page.staged .lyrics-footer {
+    animation: none;
+}
+
+/* 低功耗：布局切换一律不做动效（用户要求）；按钮也换成低功耗那套配色 */
+.app-shell.low-power .lyrics-page .lyrics-area,
+.app-shell.low-power .lyrics-page .lp-poster {
+    transition: none !important;
+}
+
+.app-shell.low-power .lyrics-page .layout-btn {
+    color: var(--color-text-primary);
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.app-shell.low-power .lyrics-page .layout-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .layout-btn {
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.10);
+}
+
+.app-shell.low-power .lyrics-page .line {
+    color: rgba(0, 0, 0, 0.22);
+    text-shadow: none;
+    font-family: var(--lyric-font, inherit);
+}
+
+/* ⚠️ 正在唱的那一组里，翻译行是 .line:not(.active) —— 它会继承上面那条"未唱浅灰"，
+   结果当前句的翻译几乎看不见（实测反馈）。这里单独加深。 */
+.app-shell.low-power .lyrics-page .lyric-group.active .line:not(.active) {
+    color: rgba(0, 0, 0, 0.72);
+}
+
+.app-shell.low-power .lyrics-page .line.near {
+    color: rgba(0, 0, 0, 0.45);
+}
+
+.app-shell.low-power .lyrics-page .line.active {
+    color: rgba(0, 0, 0, 0.92);
+    text-shadow: none;
+}
+
+.app-shell.low-power .lyrics-page .line.active .karaoke-base {
+    color: rgba(0, 0, 0, 0.28);
+}
+
+.app-shell.low-power .lyrics-page .line.active .karaoke-fill {
+    color: #111111;
+}
+
+.app-shell.low-power .lyrics-page .lyrics-note,
+.app-shell.low-power .lyrics-page .lyrics-empty .glyph,
+.app-shell.low-power .lyrics-page .lyrics-empty .sub {
+    color: var(--color-text-tertiary);
+}
+
+.app-shell.low-power .lyrics-page .lyrics-empty .title {
+    color: var(--color-text-primary);
+}
+
+.app-shell.low-power .lyrics-page .lyrics-footer .bottom-player {
+    background: #FFFFFF;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+}
+
+/* ⚠️ 波形进度条的颜色变量 --wp-track/--wp-active 在歌词主题里定义在**更深一层**的元素上
+   （lyrics.css:624-625，白波），只写在 .bottom-player 上会被那层盖掉 → 白波画在白底上，
+   看起来就是"进度条消失了"。这里用后代通配把变量压在每一层。 */
+.app-shell.low-power .lyrics-page .lyrics-footer .bottom-player,
+.app-shell.low-power .lyrics-page .lyrics-footer .progress-area,
+.app-shell.low-power .lyrics-page .lyrics-footer .progress-slider,
+.app-shell.low-power .lyrics-page .lyrics-footer .progress-slider * {
+    --wp-track: rgba(0, 0, 0, 0.14);
+    --wp-active: #1D1D1F;
+}
+
+.app-shell.low-power .lyrics-page .lyrics-footer .ctrl-btn,
+.app-shell.low-power .lyrics-page .lyrics-footer .favorite-btn,
+.app-shell.low-power .lyrics-page .lyrics-footer .right-icon-btn,
+.app-shell.low-power .lyrics-page .lyrics-footer .player-track-name,
+.app-shell.low-power .lyrics-page .lyrics-footer .time-label {
+    color: var(--color-text-primary);
+}
+
+.app-shell.low-power .lyrics-page .lyrics-footer .ctrl-btn.play-btn {
+    background: #1D1D1F;
+    color: #FFFFFF;
+}
+
+.app-shell.low-power .lyrics-page .lyrics-footer .player-track-artist {
+    color: var(--color-text-tertiary);
+}
+
+.app-shell.low-power .lyrics-page .lyrics-footer .favorite-btn.favorited {
+    color: #E0245E;
+}
+
+/* ===== 低功耗 × 夜间主题（应用内开关，**低功耗独占**）=====
+   设置项 `lowPowerTheme`：跟随系统 / 白天 / 夜间（默认跟随系统）。App.tsx 把它算成外壳上的
+   `.theme-dark` 类，而且**只有低功耗模式开着**才可能带上 —— 所以这套配色只作用于低功耗档位，
+   默认（非低功耗）那套浅色主题完全不受影响。
+
+   范围是**整个应用**：外壳、侧栏、搜索框、卡片、设置块、主播放条，以及歌词页。原因是低功耗
+   档位下它们本来就是同一套浅色亚克力，晚上整屏白都刺眼。
+
+   原则仍是"低功耗 = 减层"：夜间配色**全部是实色**，不做任何模糊 / 混合 / backdrop-filter ——
+   这恰好也是低功耗本来就在做的"毛玻璃换实色"。 */
+.app-shell.low-power.theme-dark {
+    /* 原生控件（滚动条等）跟着变暗 */
+    color-scheme: dark;
+
+    /* ① 变量层：文字 / 边框 / 分隔线 / 悬停 / 卡片底 全部跟着走（内容区绝大多数规则都用它们） */
+    --color-background: #131316;
+    --color-surface: #1B1B1F;
+    --color-surface-secondary: #232328;
+    --color-text-primary: #F2F2F5;
+    --color-text-secondary: #A1A1A8;
+    --color-text-tertiary: #7C7C84;
+    --color-border: rgba(255, 255, 255, 0.09);
+    --color-divider: rgba(255, 255, 255, 0.07);
+    --color-hover: rgba(255, 255, 255, 0.06);
+    --color-active: rgba(255, 255, 255, 0.10);
+    --color-sidebar: #17171A;
+    --card-glass-bg: #1B1B1F;
+    --shadow-card: 0 5px 20px rgba(0, 0, 0, 0.35);
+    --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.45);
+    --shadow-player: 0 12px 40px rgba(0, 0, 0, 0.45);
+
+    /* ② 材质层：外壳自己那层写死的白色亚克力渐变 */
+    background: #131316;
+    box-shadow: 0 12px 30px -24px rgba(0, 0, 0, 0.6);
+}
+
+/* 颗粒与光泽带在深色下要收敛，否则整屏发灰 */
+.app-shell.low-power.theme-dark::before {
+    opacity: 0.1;
+}
+
+.app-shell.low-power.theme-dark::after {
+    background:
+        linear-gradient(
+            115deg,
+            rgba(255, 255, 255, 0.05) 0%,
+            rgba(255, 255, 255, 0) 34%,
+            rgba(255, 255, 255, 0) 66%,
+            rgba(255, 255, 255, 0.03) 100%
+        ),
+        radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 62%);
+}
+
+/* 侧栏 / 搜索框 / 设置块：同一批写死的白色材质 */
+.app-shell.low-power.theme-dark .sidebar {
+    background: #17171A;
+    border-right-color: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell.low-power.theme-dark .search-bar {
+    background: #232328;
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: none;
+}
+
+.app-shell.low-power.theme-dark .settings-block {
+    border-color: rgba(255, 255, 255, 0.07);
+}
+
+/* ⚠️ 亮色主题里"实心主按钮 / 选中 chip"是「深底 + 白字」（background: var(--color-text-primary);
+   color: #fff）。变量一翻转，底变成浅色而字还是白的 → 白底白字（截图里"顺序播放"那个选中态
+   完全看不见）。所以这几处的字色必须跟着一起翻：浅底 + 深字。 */
+.app-shell.low-power.theme-dark .pill-btn.primary,
+.app-shell.low-power.theme-dark .chip.active {
+    color: #131316;
+}
+
+.app-shell.low-power.theme-dark .dialog-check.on svg {
+    fill: #131316;
+}
+
+/* ⚠️ 一批"悬停/选中/浮层"的背景是写死的 0.72~0.92 白（不走变量），浅色下没问题，
+   到了夜间就是一条刺眼的白条（用户反馈：曲目条悬停那一下太白）。这里统一换掉：
+   行悬停/选中 → 薄薄一层白；浮层（右键菜单/吐司/扫描横幅/文件夹条/封面流卡片）→ 实色表面。 */
+.app-shell.low-power.theme-dark .track-row:hover,
+.app-shell.low-power.theme-dark .track-row.playing,
+.app-shell.low-power.theme-dark .artist-row:hover,
+.app-shell.low-power.theme-dark .dialog-list-item:hover,
+.app-shell.low-power.theme-dark .dialog-track:hover,
+.app-shell.low-power.theme-dark .dialog-track.checked {
+    background: rgba(255, 255, 255, 0.10);
+}
+
+/* 正在播放那行的橙色标题在深底上要提亮，否则对比度不够 */
+.app-shell.low-power.theme-dark .track-row.playing .track-title {
+    color: #E8A87C;
+}
+
+.app-shell.low-power.theme-dark .context-menu,
+.app-shell.low-power.theme-dark .toast,
+.app-shell.low-power.theme-dark .scan-banner,
+.app-shell.low-power.theme-dark .folder-strip {
+    background: #232328;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+.app-shell.low-power.theme-dark .folder-strip:hover {
+    background: #2B2B31;
+}
+
+/* ⚠️ 首页封面流卡片（.cf-card）**刻意不跟着夜间主题变深**：它是深色页面上的一层"白色玻璃"，
+   按需求保留 design.css 原来的材质 —— 半透白底 + 白描边 + 白内高光/内描边都不覆盖。
+   卡片上的 .cf-meta h3/p 是近黑色文字，正因为卡片是浅色才成立，所以也不能改。
+   （设计上它相当于"深色舞台中央的实物唱片"，跟侧栏/列表那类界面 chrome 不是一回事。） */
+
+/* 主播放条：深色实底；波形进度条那两个变量也得反转（原本是"白条上的黑波"） */
+.app-shell.low-power.theme-dark > .bottom-player {
+    background-color: #1B1B1F;
+    box-shadow: 0 -14px 34px -18px rgba(0, 0, 0, 0.5);
+}
+
+.app-shell.low-power.theme-dark > .bottom-player,
+.app-shell.low-power.theme-dark > .bottom-player .progress-area,
+.app-shell.low-power.theme-dark > .bottom-player .progress-slider,
+.app-shell.low-power.theme-dark > .bottom-player .progress-slider * {
+    --wp-track: rgba(255, 255, 255, 0.22);
+    --wp-active: #FFFFFF;
+}
+
+/* ③ 歌词页（原来只做了这一块，现在与主界面同一套夜配色） */
+.app-shell.low-power.theme-dark .lyrics-page .player,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-scrim,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-veil {
+    background: #131316;
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .back {
+    color: rgba(255, 255, 255, 0.92);
+    background: rgba(255, 255, 255, 0.10);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .back:hover {
+    background: rgba(255, 255, 255, 0.18);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lp-poster-title {
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lp-poster-artist {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lp-poster-cover.is-empty {
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lp-poster-glyph {
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .line {
+    color: rgba(255, 255, 255, 0.24);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyric-group.active .line:not(.active) {
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .line.near {
+    color: rgba(255, 255, 255, 0.46);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .line.active {
+    color: rgba(255, 255, 255, 0.97);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .line.active .karaoke-base {
+    color: rgba(255, 255, 255, 0.34);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .line.active .karaoke-fill {
+    color: #FFFFFF;
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-note,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-empty .glyph,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-empty .sub {
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-empty .title {
+    color: rgba(255, 255, 255, 0.92);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .bottom-player {
+    background: #1B1B1F;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .bottom-player,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .progress-area,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .progress-slider,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .progress-slider * {
+    --wp-track: rgba(255, 255, 255, 0.22);
+    --wp-active: #FFFFFF;
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .ctrl-btn,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .favorite-btn,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .right-icon-btn,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .player-track-name,
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .time-label {
+    color: rgba(255, 255, 255, 0.92);
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .ctrl-btn.play-btn {
+    background: #FFFFFF;
+    color: #131316;
+}
+
+.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .player-track-artist {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+
+.app-shell .lyrics-page .lyric-group {
+    filter: none !important;
+}
+
+/* ===== 低功耗：卡片改成「最普通的卡片」 =====
+   平坦实色 + 一条极细描边，没有玻璃、没有投影、没有内高光。
+   为什么不只是"把模糊关掉"：卡片材质里的 box-shadow / border-color 一旦参与过渡，
+   切卡时会**逐帧重画阴影**（阴影无法走合成层）—— 那才是切换动画里真正的臃肿。
+   换成平坦材质后，切卡只剩 transform + opacity 两种合成层属性（60fps 动画保留）。
+   卡片保持白卡（与原来一致，卡片上是近黑文字才成立）—— 这也是既有决定：
+   首页卡片是深色页面上的一层白玻璃/白卡，刻意不跟着夜间主题变深。 */
+.app-shell.low-power .cf-card {
+    will-change: auto;
+    background: #FFFFFF;
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    box-shadow: none;
+    transition:
+        transform 460ms cubic-bezier(.22, 1, .36, 1),
+        opacity 320ms ease;
+}
+
+.app-shell.low-power .cf-card.cf-active {
+    box-shadow: none;
+    border-color: rgba(0, 0, 0, 0.16);
+}
+
+/* 低功耗：播放中那圈光晕本来就已停动画，这里连这一层也去掉（少一个整卡大小的图层） */
+.app-shell.low-power .cf-card.cf-active::after {
+    display: none;
+}
+
+.app-shell.low-power .cf-playing-glow {
+    animation: none;
+}
+
+/* ===== 装饰性无限动画的「暂停闸」 =====
+   CSS 无限动画由**合成器按刷新率**驱动（120/144/180Hz 屏上就是 120/144/180 帧/秒），
+   完全绕过 lib/frameBudget.ts 的帧预算 —— 这就是"加了帧预算但降幅很小"的直接原因。
+   这里做两件事：
+     ① 窗口失焦（.win-blur）：没人看 → 直接暂停，帧数归零；
+     ② 主界面被歌词页完全盖住（.lyrics-covered）：同上。
+   暂停的是"装饰性、循环"的那几个（播放光晕、长标题 marquee、扫描 spinner）；
+   歌词页自己的背景漂移不在这里 —— 它已经改成受控 rAF（见 LyricsPage.tsx）。 */
+.app-shell.win-blur .cf-card.cf-active::after,
+.app-shell.win-blur .cf-meta .marquee .marquee-track,
+.app-shell.win-blur .spinner,
+.app-shell.lyrics-covered .cf-card.cf-active::after,
+.app-shell.lyrics-covered .cf-meta .marquee .marquee-track,
+.app-shell.lyrics-covered .spinner {
+    animation-play-state: paused;
+}
+
+/* ===== 歌词页完全展开后：隐藏被完全盖住的主界面 =====
+   默认模式下主界面（侧栏/播放条的毛玻璃、卡片）仍会参与每帧合成，而歌词页的背景 drift
+   一直在产帧 → 每帧合成整窗。隐藏后这些图层不再参与合成。
+   恢复时机见 LyricsPage 里那段 useLayoutEffect 的注释（必须早于退场动画）。 */
+.app-shell.lyrics-covered .app-body,
+.app-shell.lyrics-covered > .bottom-player {
+    visibility: hidden;
+}
+
+/* ⚠️ 这里曾经是 `.low-power:has(.lyrics-page) .app-body { visibility: hidden }`（让被遮住的主界面
+   停止绘制）。实测副作用：**从歌词页返回时主界面会先闪一下纯白** —— 隐藏期间合成器丢掉了它的
+   绘制结果，重新可见时要重画一帧。低功耗模式下主界面本来是静止的（光雾已关、光晕/波形已停），
+   静态内容的绘制成本≈0，所以整条规则删掉，用体验换那一点点收益不划算。 */
+
+
+/* 槽位行里的删除按钮：与上传按钮同款，仅用红色区分意图；不可删时置灰 */
+.lf-icon-btn.lf-del:hover:not(:disabled) {
+    color: #e06c6c;
+    border-color: rgba(224, 108, 108, 0.5);
+}
+
+.lf-icon-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}

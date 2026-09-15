@@ -1,0 +1,1182 @@
+/* =========================================================================
+ * design.css —— 提取自「样式设计.html」的原始设计样式（保持像素级一致）
+ * 说明：仅追加文件末尾的“应用外壳适配”段以适配 Tauri 无边框窗口，
+ *       其余规则与设计稿逐行一致，请勿随意改动数值。
+ * ========================================================================= */
+
+        /* ===== 基础变量 & 重置 ===== */
+        :root {
+            --color-background: #F7F7F9;
+            --color-surface: #FFFFFF;
+            --color-surface-secondary: #F2F2F5;
+            --color-text-primary: #1D1D1F;
+            --color-text-secondary: #6E6E73;
+            --color-text-tertiary: #9A9A9F;
+            --color-border: rgba(0, 0, 0, 0.06);
+            --color-divider: rgba(0, 0, 0, 0.05);
+            --color-hover: rgba(0, 0, 0, 0.04);
+            --color-active: rgba(0, 0, 0, 0.07);
+            --color-sidebar: #FAFAFC;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-xl: 20px;
+            --radius-xxl: 28px;
+            --radius-window: 35px;
+            --shadow-card: 0 5px 20px rgba(0, 0, 0, 0.05);
+            --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.08);
+            --shadow-player: 0 12px 40px rgba(0, 0, 0, 0.08);
+            --shadow-window: 0 24px 80px rgba(0, 0, 0, 0.3);
+            --spacing-xs: 4px;
+            --spacing-sm: 8px;
+            --spacing-md: 16px;
+            --spacing-lg: 24px;
+            --spacing-xl: 32px;
+            --spacing-xxl: 40px;
+            --font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            --transition-fast: 120ms ease-out;
+            --transition-normal: 180ms ease-out;
+            --transition-medium: 280ms ease-out-cubic;
+            --transition-slow: 400ms ease-out-cubic;
+            --sidebar-width: 245px;
+            --player-height: 120px;
+            --app-width: 1267px;
+            --app-height: 902px;
+            --app-radius: 35px;
+            --player-radius-top: 15px;
+            --player-radius-bottom: 35px;
+            --card-glass-bg: rgba(255, 255, 255, 0.75);
+            --card-width: 180px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background: #2e2e32;
+            color: var(--color-text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        ::-webkit-scrollbar {
+            width: 0;
+            height: 0;
+            display: none;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+            display: none;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: transparent;
+            display: none;
+        }
+
+        /* ===== App Shell ===== */
+        .app-shell {
+            display: flex;
+            flex-direction: column;
+            width: var(--app-width);
+            height: var(--app-height);
+            border-radius: var(--app-radius);
+            overflow: hidden;
+            background: var(--color-background);
+            box-shadow: var(--shadow-window);
+            position: relative;
+            flex-shrink: 0;
+        }
+
+        .app-body {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+
+        /* ===== Sidebar ===== */
+        .sidebar {
+            width: var(--sidebar-width);
+            min-width: var(--sidebar-width);
+            background: var(--color-sidebar);
+            border-right: 1px solid var(--color-divider);
+            display: flex;
+            flex-direction: column;
+            padding: 20px 16px 16px;
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        /* 按需求去掉了左侧的图标标记，这里只剩文字标：原来的 gap: 10px 随之删掉，
+           padding-left 由设计稿的 8px 提到 16px，让字标左缘落在 x=32 ——
+           与下方 .nav-item 的图标列同一条竖线（.sidebar 自身还有 16px 内边距）。 */
+        .sidebar-logo {
+            display: flex;
+            align-items: center;
+            height: 50px;
+            padding: 0 8px 0 16px;
+            margin-bottom: 24px;
+            flex-shrink: 0;
+        }
+        /* 品牌字：内置的 Ephesis 手写体（@font-face 声明在 lyrics.css，全局可用）。
+           Ephesis 只有 Regular 一个字重，加粗只能靠 font-synthesis 合成 —— 与歌词页
+           同一套做法，刻意不用 -webkit-text-stroke（小数描边会发虚，见 lyrics.css 里的记录）。
+           手写体的字面比 Inter 小一大截，所以字号要单独放大，不能沿用设计稿的 17px。 */
+        .logo-text {
+            font-family: "LyricEphesis", cursive;
+            font-size: 30px;
+            font-weight: 700;
+            font-synthesis: weight;
+            letter-spacing: 0.2px;
+            /* 「Oberon music」两词之间要留出比手写体默认词距更明显的间隙。
+               用 word-spacing 而不是多包一层 span：文字内容仍是干净的 "Oberon music"，
+               冒烟断言取 textContent 时不用去猜 CSS 加了多少间距。 */
+            word-spacing: 0.28em;
+            line-height: 1;
+            color: var(--color-text-primary);
+        }
+
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            margin-bottom: 20px;
+            flex-shrink: 0;
+        }
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            height: 52px;
+            padding: 0 16px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: background var(--transition-fast);
+            font-size: 16px;
+            font-weight: 500;
+            color: var(--color-text-primary);
+            border: none;
+            background: transparent;
+            width: 100%;
+            text-align: left;
+            font-family: inherit;
+            letter-spacing: -0.1px;
+        }
+        .nav-item:hover {
+            background: var(--color-hover);
+        }
+        .nav-item.active {
+            background: var(--color-active);
+        }
+        .nav-item svg {
+            width: 21px;
+            height: 21px;
+            fill: currentColor;
+            flex-shrink: 0;
+        }
+
+        .playlist-section {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .playlist-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 8px 4px;
+            flex-shrink: 0;
+        }
+        .playlist-label {
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            color: #777777;
+            text-transform: uppercase;
+        }
+        .playlist-add-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--color-text-secondary);
+            transition: all var(--transition-fast);
+            font-size: 18px;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .playlist-add-btn:hover {
+            background: var(--color-hover);
+            color: var(--color-text-primary);
+        }
+        .playlist-add-btn svg {
+            width: 16px;
+            height: 16px;
+            fill: currentColor;
+        }
+
+        .playlist-empty {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px 12px;
+            color: var(--color-text-tertiary);
+            min-height: 140px;
+            border-radius: var(--radius-md);
+            background: rgba(0, 0, 0, 0.015);
+            margin-top: 4px;
+        }
+        .playlist-empty-icon {
+            font-size: 40px;
+            margin-bottom: 10px;
+            opacity: 0.5;
+            color: var(--color-text-tertiary);
+        }
+        .playlist-empty-title {
+            font-size: 14px;
+            font-weight: 550;
+            color: var(--color-text-secondary);
+            margin-bottom: 3px;
+        }
+        .playlist-empty-sub {
+            font-size: 12px;
+            color: var(--color-text-tertiary);
+            line-height: 1.4;
+            max-width: 160px;
+        }
+
+        .sidebar-bottom {
+            flex-shrink: 0;
+            padding-top: 12px;
+            border-top: 1px solid var(--color-divider);
+        }
+        .settings-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            height: 48px;
+            padding: 0 16px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: background var(--transition-fast);
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+            border: none;
+            background: transparent;
+            width: 100%;
+            text-align: left;
+            font-family: inherit;
+        }
+        .settings-btn:hover {
+            background: var(--color-hover);
+            color: var(--color-text-primary);
+        }
+        .settings-btn svg {
+            width: 19px;
+            height: 19px;
+            fill: currentColor;
+            flex-shrink: 0;
+        }
+
+        /* ===== Main Content ===== */
+        .main-content {
+            flex: 1;
+            min-width: 0;
+            padding: 24px 34px 20px;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        .main-top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 28px;
+            flex-shrink: 0;
+            gap: 20px;
+        }
+
+        .search-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 420px;
+            max-width: 50%;
+            height: 44px;
+            padding: 0 16px;
+            background: var(--color-surface-secondary);
+            border-radius: var(--radius-lg);
+            border: 1px solid transparent;
+            transition: all var(--transition-normal);
+            cursor: text;
+        }
+        .search-bar:hover {
+            background: #ECECF0;
+            border-color: rgba(0, 0, 0, 0.04);
+        }
+        .search-bar:focus-within {
+            background: #fff;
+            border-color: rgba(0, 0, 0, 0.1);
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        }
+        .search-bar svg {
+            width: 17px;
+            height: 17px;
+            fill: var(--color-text-tertiary);
+            flex-shrink: 0;
+        }
+        /* 放大镜已改成描边族（与侧栏导航同一枚图标）：实心时代它靠上面的 fill 取三级文字色，
+           现在描边走的是 currentColor，所以这里必须改 color 而不是 stroke —— 描边色的定义在
+           <path> 的内联样式上，给外层 <svg> 写 stroke 会被内联的 currentColor 盖掉。
+           限定直系子元素，否则会连带改掉清空按钮里那枚实心 close 图标的颜色。 */
+        .search-bar > svg {
+            color: var(--color-text-tertiary);
+        }
+        .search-bar input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            font-size: 14px;
+            font-family: inherit;
+            color: var(--color-text-primary);
+            outline: none;
+            letter-spacing: -0.1px;
+        }
+        .search-bar input::placeholder {
+            color: var(--color-text-tertiary);
+            font-size: 14px;
+        }
+
+        .window-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .window-btn {
+            width: 38px;
+            height: 34px;
+            border-radius: 10px;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+            color: var(--color-text-secondary);
+            flex-shrink: 0;
+        }
+        .window-btn:hover {
+            background: var(--color-hover);
+            color: var(--color-text-primary);
+        }
+        .window-btn.close-btn:hover {
+            background: #E81123;
+            color: #fff;
+        }
+        .window-btn svg {
+            width: 14px;
+            height: 14px;
+            fill: currentColor;
+        }
+
+        .greeting-section {
+            margin-bottom: 24px;
+            flex-shrink: 0;
+        }
+        .greeting-title {
+            font-size: 30px;
+            font-weight: 650;
+            letter-spacing: -0.4px;
+            color: var(--color-text-primary);
+            margin-bottom: 4px;
+            line-height: 1.2;
+        }
+        .greeting-sub {
+            font-size: 15px;
+            color: #777777;
+            font-weight: 400;
+            letter-spacing: -0.1px;
+        }
+
+        /* ==============================================================
+                   COVERFLOW — 磨砂玻璃卡片 + 循环切换
+                   ============================================================== */
+        .coverflow-section {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 0;
+            position: relative;
+            gap: 14px;
+            overflow: visible;
+            touch-action: none;
+        }
+
+        .cf-perspective {
+            position: relative;
+            width: 100%;
+            max-width: 920px;
+            height: 330px;
+            perspective: 1400px;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* ===== 卡片 — 磨砂玻璃材质 ===== */
+        .cf-card {
+            --x: 0px;
+            --z: 0px;
+            --s: 1;
+            --r: 0deg;
+            --o: 1;
+
+            position: absolute;
+            left: 50%;
+            top: 4px;
+            width: 224px;
+            height: 300px;
+            margin-left: -112px;
+
+            transform:
+                translateX(var(--x))
+                translateZ(var(--z))
+                scale(var(--s))
+                rotateY(var(--r));
+            opacity: var(--o);
+            transform-style: preserve-3d;
+            transform-origin: center center;
+
+            background: rgba(255, 255, 255, 0.38);
+            backdrop-filter: blur(24px) saturate(1.4);
+            -webkit-backdrop-filter: blur(24px) saturate(1.4);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-radius: 20px;
+            overflow: hidden;
+
+            box-shadow:
+                0 18px 48px rgba(0, 0, 0, 0.08),
+                0 4px 14px rgba(0, 0, 0, 0.04),
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+            transition:
+                transform 460ms cubic-bezier(.22, 1, .36, 1),
+                opacity 320ms ease,
+                box-shadow 320ms ease,
+                border-color 320ms ease;
+
+            cursor: pointer;
+            /* ⚠️ 这里原来还列了 box-shadow —— 阴影无法走合成层，写进去只会白占一个提升层的
+               名额（每张卡一个）。切卡动画真正需要提升的只有 transform 与 opacity。 */
+            will-change: transform, opacity;
+        }
+
+        /* 中心卡片高亮 */
+        .cf-card.cf-active {
+            box-shadow:
+                0 32px 72px rgba(0, 0, 0, 0.12),
+                0 8px 24px rgba(0, 0, 0, 0.05),
+                inset 0 1px 0 rgba(255, 255, 255, 0.8),
+                0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+            border-color: rgba(255, 255, 255, 0.5);
+            z-index: 50 !important;
+        }
+
+        .cf-cover {
+            position: relative;
+            width: calc(100% - 20px);
+            aspect-ratio: 1 / 1;
+            margin: 10px;
+            border-radius: 15px;
+            overflow: hidden;
+            display: grid;
+            place-items: center;
+        }
+        .cf-cover::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), transparent 40%, rgba(255, 255, 255, 0.08));
+            pointer-events: none;
+            mix-blend-mode: overlay;
+        }
+        .cf-glyph {
+            position: relative;
+            z-index: 2;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 54px;
+            font-weight: 300;
+            line-height: 1;
+            text-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+        }
+        .cf-badge {
+            position: absolute;
+            top: 24px;
+            left: 0;
+            right: 0;
+            z-index: 2;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.88);
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: -1px;
+            text-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
+        }
+
+        .cf-meta {
+            position: absolute;
+            left: 16px;
+            right: 16px;
+            bottom: 13px;
+            text-align: center;
+        }
+        .cf-meta h3 {
+            margin: 0;
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: -0.2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: rgba(29, 29, 31, 0.9);
+        }
+        .cf-meta p {
+            margin: 4px 0 0;
+            color: rgba(119, 119, 124, 0.85);
+            font-size: 13px;
+            line-height: 1.3;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ===== 分页圆点 ===== */
+        .cf-dots {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+        }
+        .cf-dot {
+            width: 7px;
+            height: 7px;
+            border: 0;
+            padding: 0;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.2);
+            cursor: pointer;
+            transition: width .25s ease, background .25s ease, transform .18s ease;
+        }
+        .cf-dot:hover {
+            transform: scale(1.2);
+            background: rgba(0, 0, 0, 0.35);
+        }
+        .cf-dot.active {
+            width: 20px;
+            background: #1D1D1F;
+        }
+
+        /* ==============================================================
+                   BOTTOM PLAYER — 磨砂玻璃
+                   ============================================================== */
+        .bottom-player {
+            height: var(--player-height);
+            margin: 0;
+            border-radius: var(--player-radius-top) var(--player-radius-top) var(--player-radius-bottom) var(--player-radius-bottom);
+            background: rgba(255, 255, 255, 0.45);
+            backdrop-filter: blur(28px) saturate(1.5);
+            -webkit-backdrop-filter: blur(28px) saturate(1.5);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-left: none;
+            border-right: none;
+            border-bottom: none;
+            box-shadow:
+                0 12px 40px rgba(0, 0, 0, 0.06),
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            gap: 16px;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 20;
+        }
+
+        .player-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .ctrl-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+            color: var(--color-text-secondary);
+            position: relative;
+            flex-shrink: 0;
+        }
+        .ctrl-btn:hover {
+            background: rgba(255, 255, 255, 0.5);
+            color: var(--color-text-primary);
+        }
+        .ctrl-btn:active {
+            transform: scale(0.95);
+        }
+        .ctrl-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+        .ctrl-btn.play-btn {
+            width: 52px;
+            height: 52px;
+            background: rgba(255, 255, 255, 0.55);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #1D1D1F;
+            border-radius: 50%;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+        }
+        .ctrl-btn.play-btn:hover {
+            background: rgba(255, 255, 255, 0.8);
+            transform: scale(1.03);
+        }
+        .ctrl-btn.play-btn:active {
+            transform: scale(0.97);
+        }
+        .ctrl-btn.play-btn svg {
+            width: 22px;
+            height: 22px;
+        }
+        .ctrl-btn.active {
+            color: #1D1D1F;
+        }
+        .ctrl-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: 3px;
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: #1D1D1F;
+        }
+
+        .player-track {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+            flex-shrink: 0;
+            max-width: 160px;
+        }
+        .player-track-cover {
+            width: 56px;
+            height: 56px;
+            border-radius: 10px;
+            object-fit: cover;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            color: rgba(255, 255, 255, 0.9);
+            transition: background 0.4s ease;
+            background: rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .player-track-info {
+            min-width: 0;
+        }
+        .player-track-name {
+            font-size: 15px;
+            font-weight: 550;
+            color: var(--color-text-primary);
+            letter-spacing: -0.2px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: default;
+        }
+        .player-track-artist {
+            font-size: 12px;
+            color: #777777;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .favorite-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+            color: var(--color-text-tertiary);
+            flex-shrink: 0;
+        }
+        .favorite-btn:hover {
+            background: rgba(255, 255, 255, 0.4);
+            color: var(--color-text-secondary);
+        }
+        .favorite-btn.favorited {
+            color: #E0245E;
+        }
+        .favorite-btn svg {
+            width: 19px;
+            height: 19px;
+            fill: currentColor;
+            transition: fill var(--transition-fast);
+        }
+
+        .progress-area {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 8px;
+        }
+        .time-label {
+            font-size: 12px;
+            color: var(--color-text-tertiary);
+            letter-spacing: 0.2px;
+            white-space: nowrap;
+            min-width: 38px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        /* 进度条：画布绘制的 M3 波浪滑块（见 components/WaveProgress.tsx）。
+           只留容器尺寸与颜色变量 —— 轨道、波浪、手柄全部由 canvas 画。
+           颜色走 CSS 变量，歌词页只改变量、不动尺寸（冒烟里有一条断言要求
+           两个播放条的进度条几何完全一致）；悬停时轨道由 4px 加粗到 6px 的
+           手感也搬进了组件，所以这里不再有 :hover 改高度。 */
+        .progress-slider {
+            flex: 1;
+            height: 24px;
+            cursor: pointer;
+            position: relative;
+            touch-action: none;
+            --wp-track: rgba(0, 0, 0, 0.12);
+            --wp-active: #1D1D1F;
+        }
+        .progress-slider canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .player-right-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .right-icon-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-fast);
+            color: var(--color-text-secondary);
+            position: relative;
+            flex-shrink: 0;
+        }
+        .right-icon-btn:hover {
+            background: rgba(255, 255, 255, 0.45);
+            color: var(--color-text-primary);
+        }
+        .right-icon-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .volume-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            width: auto;
+            flex-shrink: 0;
+        }
+        .volume-slider {
+            width: 70px;
+            flex: 0 0 70px;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            border-radius: 999px;
+            background: rgba(0, 0, 0, 0.12);
+            outline: none;
+            cursor: pointer;
+            transition: background var(--transition-fast);
+            margin: 0;
+        }
+        .volume-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #FFFFFF;
+            border: 2px solid #B0B0B5;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+        }
+        .volume-slider::-webkit-slider-thumb:hover {
+            border-color: #6E6E73;
+            transform: scale(1.1);
+        }
+
+        /* ===== Queue Popover ===== */
+        .queue-popover {
+            position: absolute;
+            bottom: calc(100% + 12px);
+            right: 20px;
+            width: 320px;
+            max-height: 300px;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(24px) saturate(1.4);
+            -webkit-backdrop-filter: blur(24px) saturate(1.4);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-radius: var(--radius-xl);
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
+            overflow-y: auto;
+            padding: 8px;
+            z-index: 50;
+            display: none;
+            animation: fadeInUp 200ms ease-out;
+        }
+        .queue-popover.visible {
+            display: block;
+        }
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .queue-header {
+            font-size: 13px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--color-text-tertiary);
+            padding: 8px 12px;
+            margin-bottom: 4px;
+        }
+        .queue-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: background var(--transition-fast);
+        }
+        .queue-item:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        .queue-item-cover {
+            width: 36px;
+            height: 36px;
+            border-radius: 6px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: rgba(255, 255, 255, 0.9);
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(4px);
+        }
+        .queue-item-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .queue-item-name {
+            font-size: 13px;
+            font-weight: 550;
+            color: var(--color-text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .queue-item-artist {
+            font-size: 11px;
+            color: var(--color-text-tertiary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* ===== Dialog ===== */
+        .dialog-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.25);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 180ms ease-out;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+        .dialog-overlay.visible {
+            display: flex;
+        }
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+        .dialog {
+            width: 400px;
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(28px) saturate(1.5);
+            -webkit-backdrop-filter: blur(28px) saturate(1.5);
+            border: 1px solid rgba(255, 255, 255, 0.35);
+            border-radius: var(--radius-xl);
+            box-shadow: 0 24px 80px rgba(0, 0, 0, 0.2);
+            padding: 28px;
+            animation: dialogIn 220ms ease-out;
+        }
+        @keyframes dialogIn {
+            from {
+                opacity: 0;
+                transform: scale(0.95) translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+            }
+        }
+        .dialog-title {
+            font-size: 20px;
+            font-weight: 650;
+            letter-spacing: -0.3px;
+            color: var(--color-text-primary);
+            margin-bottom: 18px;
+        }
+        .dialog-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+            margin-bottom: 6px;
+        }
+        .dialog-input {
+            width: 100%;
+            height: 42px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 0 14px;
+            font-size: 14px;
+            font-family: inherit;
+            color: var(--color-text-primary);
+            outline: none;
+            transition: all var(--transition-fast);
+            margin-bottom: 20px;
+            background: rgba(255, 255, 255, 0.3);
+            backdrop-filter: blur(8px);
+        }
+        .dialog-input:focus {
+            border-color: rgba(0, 0, 0, 0.2);
+            box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.05);
+        }
+        .dialog-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+        }
+        .dialog-btn {
+            padding: 10px 20px;
+            border-radius: var(--radius-md);
+            border: none;
+            font-size: 14px;
+            font-weight: 550;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            letter-spacing: -0.1px;
+        }
+        .dialog-btn.cancel {
+            background: rgba(255, 255, 255, 0.2);
+            color: var(--color-text-secondary);
+        }
+        .dialog-btn.cancel:hover {
+            background: rgba(255, 255, 255, 0.4);
+        }
+        .dialog-btn.confirm {
+            background: #1D1D1F;
+            color: #fff;
+        }
+        .dialog-btn.confirm:hover {
+            background: #2E2E32;
+            transform: scale(1.02);
+        }
+        .dialog-btn.confirm:active {
+            transform: scale(0.97);
+        }
+
+        .empty-library {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            text-align: center;
+            color: var(--color-text-tertiary);
+            gap: 12px;
+        }
+        .empty-library-icon {
+            font-size: 56px;
+            opacity: 0.5;
+        }
+        .empty-library-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--color-text-secondary);
+        }
+        .empty-library-sub {
+            font-size: 14px;
+            color: var(--color-text-tertiary);
+        }
+        .empty-library-btn {
+            padding: 10px 22px;
+            border-radius: var(--radius-md);
+            background: #1D1D1F;
+            color: #fff;
+            border: none;
+            font-size: 14px;
+            font-weight: 550;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all var(--transition-fast);
+            margin-top: 8px;
+        }
+        .empty-library-btn:hover {
+            background: #2E2E32;
+            transform: scale(1.03);
+        }
+
+/* =========================================================================
+ * 应用外壳适配（Tauri 无边框窗口：窗口背景透明，圆角由 CSS 提供）
+ * ========================================================================= */
+html,
+body,
+#root {
+    width: 100%;
+    height: 100%;
+}
+
+body {
+    background: transparent;
+    display: block;
+    overflow: hidden;
+}
+
+#root {
+    display: flex;
+}
+
+/* 窗口内铺满，尺寸跟随窗口而非固定 1056×752 */
+.app-shell {
+    width: 100%;
+    height: 100%;
+    flex: 1;
+    box-shadow: none;
+}
+
+/* 最大化时取消圆角 */
+.app-shell.maximized {
+    border-radius: 0;
+}
+
+.app-shell.maximized .bottom-player {
+    border-radius: 0;
+}
+
+/* ===== 拖拽窗口边框期间的合成降级 =====
+   外壳的 backdrop-filter 模糊的是「窗口背后的桌面」（窗口是 transparent 的），
+   而外壳自身底色约 96% 不透明 —— 视觉上几乎看不出差别，但每帧要对整个窗口做
+   一次高斯模糊（+20% 尺寸后约 114 万像素）。拖拽时主线程本就被布局与重绘占满，
+   这层额外开销会让合成分掉帧，表现为背景闪黑。
+   App.tsx 在 onResized 里挂 .resizing、停止 180ms 后摘掉，所以只在拖拽期间生效。 */
+html.resizing .app-shell {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+/* 同理：这层 CSS 模糊每次尺寸变化都要整表面重做，拖拽时先省掉（0.6px 看不出差别） */
+html.resizing .home-ambient canvas {
+    filter: none;
+}
+
+/* 主内容区可滚动，滚动条隐藏（与设计稿一致） */
+.main-content {
+    scrollbar-width: none;
+}
+
+/* 拖拽区域（Tauri data-tauri-drag-region） */
+.drag-region {
+    cursor: default;
+}

@@ -1,0 +1,672 @@
+/* ===== 内置歌词字体（随应用打包）===== */
+@font-face {
+    font-family: "LyricEphesis";
+    src: url("../assets/fonts/Ephesis-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+@font-face {
+    font-family: "LyricMaShanZheng";
+    src: url("../assets/fonts/MaShanZheng-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+/* =========================================================================
+ * 沉浸式歌词页 —— 样式逐条取自《歌词页设计.html》，仅做两处处理：
+ *   1. 每条选择器统一加 `.lyrics-page` 前缀，避免与主界面同名类冲突（.player/.controls/.actions/.progress 等）；
+ *   2. 去掉 html/body/* 的全局重置与 .bg 里内嵌的 base64 背景图（背景改由专辑封面动态注入）。
+ * ========================================================================= */
+
+.lyrics-page .player{position:relative;width:min(1536px,calc(100vw - 32px));height:min(960px,calc(100vh - 32px));min-height:620px;overflow:hidden;border-radius:34px;border:1px solid rgba(255,255,255,.28);isolation:isolate;box-shadow:0 30px 80px rgba(0,0,0,.3)}
+
+.lyrics-page .bg.bg-tiny{filter:saturate(1.08) brightness(.78)}
+/* 40px 小图铺满后，37.8px 模糊已无意义（放大本身就是模糊），撤掉它 =
+   省掉一次全窗大半径模糊（多趟降采样）与一张 2.3MP 大纹理。saturate/brightness 保留，
+   保证这一层与"渐变层被 CSS 滤镜压暗"的行为一致。 */
+.lyrics-page .bg{position:absolute;inset:-8%;z-index:-4;background:linear-gradient(125deg,rgba(18,8,3,.15),rgba(0,0,0,.08)),none center/cover no-repeat;filter:blur(37.8px) saturate(1.08) brightness(.78);transform:scale(1.13)}
+/* ⚠️ 这条原来是 `animation:drift 30s ease-in-out infinite alternate`。
+   CSS 无限动画由合成器按刷新率驱动（120/144/180Hz 就是那么多次/秒），绕过帧预算 ——
+   所以改成**受控 rAF**：见 LyricsPage.tsx 的"背景漂移"effect（过 frameBudget、失焦不写值）。
+   这里的 transform:scale(1.13) 只是首帧兜底。 */
+
+.lyrics-page .bg-tint{position:absolute;inset:0;z-index:-3;background:radial-gradient(circle at 45% 42%,rgba(255,173,77,.18),transparent 34%),radial-gradient(circle at 12% 76%,rgba(255,92,30,.12),transparent 28%),linear-gradient(180deg,rgba(255,190,110,.08),transparent 30%,rgba(35,8,3,.30) 100%);mix-blend-mode:screen}
+
+.lyrics-page .vignette{position:absolute;inset:0;z-index:-2;background:radial-gradient(circle at center,transparent 30%,rgba(0,0,0,.1) 65%,rgba(0,0,0,.47) 100%),linear-gradient(180deg,rgba(0,0,0,.10),transparent 25%,transparent 72%,rgba(0,0,0,.28));pointer-events:none}
+
+.lyrics-page .grain{position:absolute;inset:0;z-index:2;pointer-events:none;opacity:.015;background-image:repeating-radial-gradient(circle at 0 0,rgba(255,255,255,.75) 0 1px,transparent 1px 4px);background-size:5px 5px;}
+
+.lyrics-page .ambient{position:absolute;width:520px;height:520px;left:50%;top:46%;translate:-50% -50%;z-index:-1;border-radius:50%;background:radial-gradient(circle,rgba(255,172,79,.24),rgba(255,100,23,.07) 35%,transparent 70%);filter:blur(27px);opacity:.88}
+/* ⚠️ 这里原来是 `animation:breathe 8s ease-in-out infinite`（缩放 .96↔1.05、透明度 .75↔1）。
+   它由合成器按刷新率跑，180Hz 上等于每秒 180 帧的白算；而这个"呼吸"肉眼几乎不可辨。
+   现在改成**静态发光**（opacity:.88 ≈ 原来呼吸的中间值），产帧源直接少一个。 */
+
+.lyrics-page .glass{border:1px solid rgba(255,255,255,.23);background:rgba(255,255,255,.11);backdrop-filter:blur(24px) saturate(125%);-webkit-backdrop-filter:blur(24px) saturate(125%);box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 12px 35px rgba(0,0,0,.10)}
+
+.lyrics-page .topbar{position:absolute;left:28px;right:28px;top:26px;display:flex;justify-content:space-between;align-items:center;z-index:10;transition:.45s ease}
+
+.lyrics-page .track-pill{display:flex;align-items:center;gap:12px;padding:8px 15px 8px 7px;border-radius:18px;min-width:270px}
+
+.lyrics-page .back{width:35px;height:35px;display:grid;place-items:center;border-radius:50%;cursor:pointer;transition:.2s}
+
+.lyrics-page .back:hover{background:rgba(255,255,255,.12);transform:translateX(-2px)}
+
+.lyrics-page .cover-mini, .lyrics-page .cover-small{object-fit:cover;box-shadow:0 6px 20px rgba(0,0,0,.22)}
+
+.lyrics-page .cover-mini{width:48px;height:48px;border-radius:12px}
+
+.lyrics-page .track-meta strong, .lyrics-page .current-song strong{display:block;font-weight:520;letter-spacing:-.01em}
+
+.lyrics-page .track-meta strong{font-size:15px}
+
+.lyrics-page .track-meta span, .lyrics-page .current-song span{display:block;margin-top:3px;font-size:12px;color:rgba(255,255,255,.57)}
+
+.lyrics-page .top-actions{display:flex;overflow:hidden;border-radius:18px}
+
+.lyrics-page .icon-btn, .lyrics-page .control-btn{border:0;background:transparent;color:rgba(255,255,255,.88);cursor:pointer;transition:.2s}
+
+.lyrics-page .icon-btn{width:50px;height:46px;border-right:1px solid rgba(255,255,255,.11);display:grid;place-items:center}
+
+.lyrics-page .icon-btn:last-child{border-right:0}
+
+.lyrics-page .icon-btn:hover, .lyrics-page .control-btn:hover{background:rgba(255,255,255,.11)}
+
+.lyrics-page svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+.lyrics-page .lyrics-area{position:absolute;inset:0;z-index:4;display:flex;justify-content:center;pointer-events:none}
+
+.lyrics-page .lyrics{width:min(780px,72vw);height:68%;margin-top:104px;padding:55px 0 150px;overflow:hidden;display:flex;justify-content:center;text-align:center;mask-image:linear-gradient(to bottom,transparent 0,#000 17%,#000 80%,transparent 100%);-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 17%,#000 80%,transparent 100%)}
+
+.lyrics-page .lyrics-track{display:flex;flex-direction:column;align-items:center;gap:25px;transform:translateY(-74px)}
+
+.lyrics-page .line{margin:0;max-width:730px;color:rgba(255,255,255,.24);font-family:var(--lyric-font,inherit);font-size:calc(clamp(19px,1.65vw,28px)*var(--lyric-size,1));font-weight:var(--lyric-weight,420);font-synthesis:weight;line-height:1.35;transition:.55s ease;white-space:nowrap;text-shadow:0 0 0 transparent}
+
+.lyrics-page .line.near{color:rgba(255,255,255,.54)}
+
+.lyrics-page .line.active{color:rgba(255,255,255,.97);font-size:calc(clamp(31px,2.65vw,46px)*var(--lyric-size,1));font-weight:calc(var(--lyric-weight,420) + 80);transform:scale(1.01);text-shadow:0 0 11px rgba(255,220,180,.28),0 0 36px rgba(255,150,56,.19)}
+
+.lyrics-page .bottom{position:absolute;left:28px;right:28px;bottom:26px;height:92px;z-index:12;display:grid;grid-template-columns:300px minmax(260px,1fr) 350px;align-items:center;padding:0 22px;border-radius:24px;transition:.45s ease}
+
+.lyrics-page .controls, .lyrics-page .actions{display:flex;align-items:center}
+
+.lyrics-page .controls{gap:5px}
+
+.lyrics-page .actions{justify-content:flex-end;gap:8px}
+
+.lyrics-page .control-btn{width:40px;height:40px;display:grid;place-items:center;border-radius:50%}
+
+.lyrics-page .play{width:52px;height:52px;margin:0 3px;color:#2a1308;background:rgba(255,255,255,.88);box-shadow:0 8px 26px rgba(0,0,0,.18)}
+
+.lyrics-page .play:hover{background:#fff}
+
+.lyrics-page .current-song{display:flex;align-items:center;gap:11px;min-width:0}
+
+.lyrics-page .cover-small{width:52px;height:52px;flex:0 0 52px;border-radius:13px}
+
+.lyrics-page .current-song .meta{min-width:0}
+
+.lyrics-page .current-song strong{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.lyrics-page .progress{padding:0 25px}
+
+.lyrics-page .times{display:flex;justify-content:space-between;margin-bottom:7px;color:rgba(255,255,255,.53);font-size:11px}
+
+.lyrics-page .rail, .lyrics-page .volume-rail{position:relative;height:3px;border-radius:999px;background:rgba(255,255,255,.23)}
+
+.lyrics-page .rail::before{content:"";position:absolute;left:0;top:0;bottom:0;width:42%;border-radius:inherit;background:rgba(255,235,211,.9);box-shadow:0 0 13px rgba(255,175,74,.22)}
+
+.lyrics-page .rail::after{content:"";position:absolute;left:42%;top:50%;width:9px;height:9px;translate:-50% -50%;border-radius:50%;background:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.1),0 0 14px rgba(255,184,86,.3)}
+
+.lyrics-page .volume{display:flex;align-items:center;gap:10px}
+
+.lyrics-page .volume-rail{width:86px}
+
+.lyrics-page .volume-rail::before{content:"";position:absolute;left:0;top:0;bottom:0;width:67%;border-radius:inherit;background:rgba(255,255,255,.78)}
+
+.lyrics-page .immersive .topbar, .lyrics-page .immersive .lyrics-footer{opacity:0;transform:translateY(8px)}
+
+.lyrics-page .immersive:hover .topbar, .lyrics-page .immersive:hover .lyrics-footer{opacity:1;transform:none}
+
+@keyframes drift {from{transform:scale(1.13) translate3d(-1.2%,-.5%,0)}to{transform:scale(1.16) translate3d(1.2%,.8%,0)}}
+
+@keyframes breathe {0%,100%{transform:translate(-50%,-50%) scale(.96);opacity:.75}50%{transform:translate(-50%,-50%) scale(1.05);opacity:1}}
+
+@media(max-width:1000px) {
+.lyrics-page .player{width:100vw;height:100vh;border-radius:0;border:0}
+.lyrics-page .bottom{grid-template-columns:1fr;height:110px}
+.lyrics-page .current-song, .lyrics-page .actions{display:none}
+.lyrics-page .controls{justify-content:center}
+.lyrics-page .progress{padding:0 8px}
+.lyrics-page .lyrics{width:88vw}
+.lyrics-page .line{white-space:normal}
+}
+
+/* ===== 应用内适配（不改设计稿数值，只做尺寸与交互补足） ===== */
+/* 窗口内铺满：设计稿是浏览器页面，这里的外层已经是 1056×752 的应用窗口 */
+.lyrics-page{
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    border-radius: var(--app-radius);
+    overflow: hidden;
+    /* 进场现在由里面的深色圆盘（.lyrics-scrim）用 transform 完成，这里不再需要裁剪动画。
+       overflow: hidden 顺带把那个超大的圆盘裁在窗口内。 */
+}
+
+/* 面板背后的深色底 —— 它同时是**进场的那个圆盘**。
+   面板圆角弧线上的反锯齿像素约 82% 被面板覆盖，剩下 18% 露出的是它背后那一层；背后若是
+   外壳的近白底，深色歌词页上沿弧线就会出现一条亮线。所以这一层必须**永远比面板大**并且是深色；
+   现在它是个圆盘（稳定态已盖满整窗），面板叠在它上面，弧线处露出的自然还是深色。
+   ⚠️ 垫在 .lyrics-page 里、面板之前，而不是垫在外壳上 —— 垫外壳的话，从歌词页返回时
+   外壳还是暗的，页面会闪一下黑（实测到的问题）。
+
+   ⚠️ 为什么不在这里做 clip-path：裁剪形状每变一次，浏览器就要按新圆把整窗内容**重新光栅化**
+   （实测进场瞬间 GPU 从 13% 顶到 22%）。现在改成"预先画好的实心大圆 + transform: scale()"：
+     · 布局只有 DISC_BASE(640px) 那么大 —— 不需要一张跟窗口等大的图层（640² 纹理≈1.6MB）；
+     · 放大由合成器完成，不重画内容；
+     · --disc-scale 是"盖满整窗所需倍数"（LyricsPage.tsx 按 rMax 算好），
+       --ox/--oy 是点击点（px），圆心靠它们定位。
+   稳定态 = scale(盖满)，入场从 0 长上来，退场缩回去 —— 都是合成层操作。 */
+/* 全窗深色底：稳定态盖满整窗，负责"最终一定有暗底"（面板圆角弧线处不漏白线）。
+   它**只做 opacity 淡入** —— 这是最便宜的一类合成层动画（内容栅格化一次，之后每帧只是整体混合），
+   和低功耗模式用的是同一套机制。形状动画（裁剪 / 大面积缩放）才是贵的，所以这里不碰形状。 */
+.lyrics-veil {
+    position: absolute;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background-color: #1b1b1b;
+    opacity: 1; /* 稳定态；入场时由 LyricsPage 先设成 0 再淡入（useLayoutEffect 在首绘前执行，不会闪） */
+}
+
+.lyrics-scrim {
+    position: absolute;
+    left: var(--ox, 50%);
+    top: var(--oy, 50%);
+    width: 640px;
+    height: 640px;
+    margin: -320px 0 0 -320px; /* 让圆心正好落在点击点 */
+    z-index: -3;               /* 压在 .lyrics-veil 之下：暗底变实的过程中把绽开"盖"过去 */
+    border-radius: 50%;
+    pointer-events: none;
+    /* 暖光边缘直接烘焙进自身背景 —— 不用 box-shadow：外发光会撑大图层边界，
+       而这个圆盘会被放大（外发光按比例放大后是一圈很大的模糊，栅格化代价明显）。 */
+    background-image:
+        radial-gradient(
+            circle at 50% 50%,
+            rgba(255, 177, 94, 0) 58%,
+            rgba(255, 177, 94, 0.26) 76%,
+            rgba(255, 177, 94, 0.05) 88%,
+            rgba(255, 177, 94, 0) 100%
+        ),
+        radial-gradient(circle at 50% 45%, #25252f 0%, #1b1b1b 60%, #151518 100%);
+    transform: scale(var(--disc-scale, 0));
+    transform-origin: center center;
+    will-change: transform;
+}
+
+.lyrics-page .player{
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    border: 0;
+    border-radius: var(--app-radius);
+}
+
+/* 进度条 / 音量条的可点区域（设计稿只有 3px 高，实际拖不动） */
+.lyrics-page .rail-hit{
+    padding: 9px 0;
+    margin: -9px 0;
+    cursor: pointer;
+}
+
+.lyrics-page .volume-hit{
+    display: flex;
+    align-items: center;
+    padding: 9px 0;
+    margin: -9px 0;
+    cursor: pointer;
+}
+
+/* 纯文本歌词提示 & 空状态 */
+.lyrics-page .lyrics-note{
+    margin: 0 0 6px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.45);
+    letter-spacing: 0.02em;
+}
+
+.lyrics-page .lyrics-empty{
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    color: rgba(255, 255, 255, 0.72);
+    text-align: center;
+    pointer-events: auto;
+}
+
+.lyrics-page .lyrics-empty .glyph{
+    font-size: 40px;
+    opacity: 0.7;
+}
+
+.lyrics-page .lyrics-empty .title{
+    font-size: 17px;
+    font-weight: 520;
+}
+
+.lyrics-page .lyrics-empty .sub{
+    font-size: 13px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.lyrics-page .lyrics-empty .sub code{
+    font-family: inherit;
+    padding: 1px 5px;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.14);
+}
+
+/* 歌词区在没有歌词时也需要能滚动查看 */
+.lyrics-page .lyrics.scrollable{
+    overflow-y: auto;
+    scrollbar-width: none;
+    pointer-events: auto;
+}
+
+.lyrics-page .lyrics.scrollable::-webkit-scrollbar{
+    display: none;
+}
+
+/* 未同步歌词：所有行同等显示 */
+.lyrics-page .line.plain{
+    color: rgba(255, 255, 255, 0.6);
+    font-size: clamp(16px, 1.4vw, 22px);
+    white-space: normal;
+}
+
+/* 顶部胶囊与底部条在沉浸模式下仍可鼠标唤出 */
+.lyrics-page .immersive {
+    cursor: none;
+}
+
+/* 滚动层提升为合成层：换行时的位移不再触发整列文字重绘（卡顿主因之一） */
+.lyrics-page .lyrics-track {
+    will-change: transform;
+}
+
+/* 歌词页与窗口圆角重合处不再画第二道弧线/白边（双圆角半像素错位会露出白线） */
+.lyrics-page {
+    border-radius: 0;
+}
+
+.lyrics-page .player {
+    border: 0;
+}
+
+
+/* ===== 逐字点亮（卡拉OK）：底层未唱到为暗色，上层已唱到为亮色 + 设计稿的光晕 ===== */
+.lyrics-page .line.active {
+    position: relative;
+}
+
+.lyrics-page .line.active .karaoke-base {
+    color: rgba(255, 255, 255, 0.42);
+    text-shadow: none;
+}
+
+.lyrics-page .line.active .karaoke-fill {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    color: rgba(255, 255, 255, 0.99);
+    
+    pointer-events: none;
+    /* 点亮进度由 requestAnimationFrame 每帧写入，不用 CSS 过渡（过渡会让进度落后一帧以上） */
+    will-change: clip-path;
+}
+
+
+/* ===== 歌词页进场动效：从点击处圆形扩散 + 圆点飞行 + 内容分层入场 ===== */
+/* 面板（.player）用 clip-path 圆形扩散：半径与圆心由 JS 按点击位置写入内联样式 */
+.lyrics-page .player {
+    transition: clip-path 820ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: clip-path;
+}
+
+/* 内容分层入场：错峰淡入 + 上浮（动画结束后移除 .staged，交还沉浸模式的显示控制） */
+@keyframes lyrics-layer-in {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.lyrics-page.staged .topbar {
+    animation: lyrics-layer-in 800ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
+}
+
+.lyrics-page.staged .lyrics-area {
+    animation: lyrics-layer-in 800ms cubic-bezier(0.22, 1, 0.36, 1) 240ms both;
+}
+
+.lyrics-page.staged .lyrics-footer {
+    animation: lyrics-layer-in 800ms cubic-bezier(0.22, 1, 0.36, 1) 340ms both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lyrics-page .player {
+        transition: none;
+    }
+
+    .lyrics-page.staged .topbar,
+    .lyrics-page.staged .lyrics-area,
+    .lyrics-page.staged .lyrics-footer {
+        animation: none;
+    }
+}
+
+/* ===== 封面缺失时的兜底（避免出现碎图占位）===== */
+.lyrics-page .cover-fallback {
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.06));
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 18px;
+}
+
+.lyrics-page span.cover-small.cover-fallback {
+    font-size: 20px;
+    box-shadow: none;
+}
+
+
+/* ===== 播放模式按钮的选中态与单曲循环角标（歌词页）===== */
+.lyrics-page .control-btn {
+    position: relative;
+}
+
+.lyrics-page .control-btn.active {
+    color: #FFFFFF;
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.lyrics-page .repeat-one-badge {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    color: #2A1308;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 5px;
+    padding: 1px 3px;
+}
+
+
+/* ===== 歌词页交互：滚轮浏览 + 点击某句跳转 ===== */
+/* 设计稿的 .lyrics-area 是 pointer-events:none（纯展示），这里放开以便滚轮与点击 */
+.lyrics-page .lyrics-area,
+.lyrics-page .lyrics {
+    pointer-events: auto;
+}
+
+/* 位移改由 JS 每帧缓动写入，关掉设计稿的 CSS 过渡，避免与滚轮抢手感 */
+.lyrics-page .lyrics-track {
+    transition: none;
+}
+
+.lyrics-page .line {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.lyrics-page .line.clickable {
+    cursor: pointer;
+}
+
+.lyrics-page .line.clickable:hover {
+    color: rgba(255, 255, 255, 0.78);
+}
+
+/* 全屏/最大化时窗口是直角，歌词页也要跟着去掉圆角 */
+.app-shell.maximized .lyrics-page .player {
+    border-radius: 0;
+}
+
+.app-shell.maximized .lyrics-page {
+    border-radius: 0;
+}
+
+
+/* ===== 歌词页控制条图标尺寸（与播放条同一套比例）===== */
+.lyrics-page .control-btn:not(.mode-btn) svg {
+    width: 22.4px;
+    height: 22.4px;
+}
+
+.lyrics-page .control-btn.play svg {
+    width: 26.4px;
+    height: 26.4px;
+}
+
+/* 播放模式按钮：回到设计稿原始尺寸 */
+.lyrics-page .control-btn.mode-btn svg {
+    width: 19px;
+    height: 19px;
+}
+
+
+/* ===== 歌词行切换：流畅化 ===== */
+/* 设计稿 .line 是 transition: .55s ease（全属性），把 font-size 也做了过渡：
+   新句会从 28px 逐帧长到 46px，逐帧触发整列重排；而 JS 居中又在这段过渡中量高度，
+   于是「放大」和「滚动」互相打架，看起来就卡一下。
+   现在字号瞬时生效（单次重排），入场用合成层的 scale/opacity 动画落位。 */
+.lyrics-page .line {
+    /* 所有行同尺寸：放大交给外层 .lyric-group（整组一起放大），逐行零重排 */
+    font-size: calc(clamp(19px, 1.65vw, 28px) * var(--lyric-size, 1));
+    transition: color 380ms ease, opacity 380ms ease;
+}
+
+.lyrics-page .line.active {
+    transform: none;
+    text-shadow: none;
+    animation: none;
+}
+
+/* ===== 歌词组：原文 + 翻译作为「一个整体」 ===== */
+.lyrics-page .lyric-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px; /* 组内两行贴合，体现「一体化」 */
+    /* 只对模糊做过渡；字号变化瞬时生效（避免逐帧重排） */
+    /* ⚠️ 这里原来有 transition: filter 430ms linear。
+       换行时模糊半径变化的组会在 430ms 内**逐帧重新模糊文字图层** —— 这是「歌词一切换
+       瞬间冲到 15%（稳态仅 6%）」的主因。每组每次只变 0.8px 半径（整体 1~2.6px 量级），
+       瞬变肉眼不可辨，所以直接去掉过渡、模糊一次到位。 */
+    transition: none;
+}
+
+.lyrics-page .lyric-group.active .line {
+    /* 当前句与翻译统一比普通行重一档；用的是真实可用字重（单字重字体由 font-synthesis 合成） */
+    font-weight: calc(var(--lyric-weight, 420) + 80);
+}
+
+.lyrics-page .lyric-group.active .line.active {
+    /* 用 font-size 放大（不是 transform）：文字按目标字号重新光栅化，边缘清晰不发虚 */
+    font-size: calc(clamp(31px, 2.65vw, 46px) * var(--lyric-size, 1));
+}
+
+/* 组内的翻译行跟着一起放大（同样用 font-size），颜色略提亮以便阅读 */
+.lyrics-page .lyric-group.active .line:not(.active) {
+    font-size: calc(clamp(23px, 2vw, 34px) * var(--lyric-size, 1));
+    color: rgba(255, 255, 255, 0.76);
+}
+
+/* 光效：当前按需求「全部去掉」（试效果）。
+   想恢复「仅文字发光」时，取消下面这行的注释即可（曾经用的是 5px + 14px 的贴字形短光晕）：
+   text-shadow: 0 0 5px rgba(255, 246, 232, 0.34), 0 0 14px rgba(255, 192, 130, 0.16); */
+.lyrics-page .line.active .karaoke-fill {
+    text-shadow: none;
+}
+
+
+
+/* 注：曾用 -webkit-text-stroke 增粗，小数描边会产生半透明「毛玻璃」感，已按需求去掉 */
+
+
+/* ===== 歌词页底栏：直接复用主界面播放条组件（同一份按钮、进度条、音量）=====
+   容器只提供「歌词页玻璃风 + 圆角 + 定位」，内部控件与主界面完全同款。 */
+.lyrics-page .lyrics-footer {
+    /* 与播放器页底栏一致：满宽、紧贴窗口底边（窗口下沿圆角 35px 正好与底栏对齐） */
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 12;
+    transition: opacity 240ms ease, transform 240ms ease;
+}
+
+.lyrics-page .lyrics-footer .bottom-player {
+    height: var(--player-height);
+    /* 按需求去掉一圈白线：不用描边、也不用内高光（两者在深色歌词页上都会变成白边），
+       材质靠 0.11 半透底 + blur(24px) saturate(125%)，边界由下方柔和投影交代。 */
+    border: 0;
+    box-shadow: 0 14px 34px -18px rgba(0, 0, 0, 0.28);
+    background: rgba(255, 255, 255, 0.11);
+    backdrop-filter: blur(24px) saturate(125%);
+    -webkit-backdrop-filter: blur(24px) saturate(125%);
+    /* 上圆角取设计令牌的 15px（与播放器页一致），下方沿用窗口/播放器的 35px */
+    border-radius: var(--player-radius-top) var(--player-radius-top) var(--player-radius-bottom)
+        var(--player-radius-bottom);
+    padding: 0 22px;
+    gap: 14px;
+    z-index: 1;
+}
+
+
+/* ===== 沉浸清屏：点击顶栏「沉浸」后只留歌词 =====
+   用 !important 压过：① .immersive:hover 的唤出规则（伪类优先级更高）
+   ② .staged 入场动画（animation 的 fill 会覆盖普通声明）——否则鼠标一动或动画一跑，
+   顶栏/底栏就会自己冒回来。清屏状态只能靠再次点击按钮或 Esc 退出。 */
+.lyrics-page.cleared .topbar,
+.lyrics-page.cleared .lyrics-footer {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transform: translateY(10px) !important;
+    animation: none !important;
+}
+
+/* 清屏后保留一个极简退出按钮（鼠标悬停变亮；也可按 Esc） */
+.lyrics-page .clear-exit {
+    position: absolute;
+    top: 24px;
+    right: 26px;
+    z-index: 14;
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.72);
+    cursor: pointer;
+    opacity: 0.45;
+    transition: opacity 200ms ease, background 200ms ease, color 200ms ease;
+}
+
+.lyrics-page .clear-exit:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.18);
+    color: #fff;
+}
+
+.lyrics-page .clear-exit svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+/* ===== 歌词页底栏控件：去掉一圈圆形毛玻璃，只留清晰可见的图标 =====
+   （播放键按需求仍保留圆形底；尺寸与主界面逐一对应，只是换了配色） */
+.lyrics-page .lyrics-footer .ctrl-btn {
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: none;
+    color: rgba(255, 255, 255, 0.94);
+}
+
+.lyrics-page .lyrics-footer .ctrl-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+}
+
+.lyrics-page .lyrics-footer .ctrl-btn.active {
+    color: #fff;
+}
+
+.lyrics-page .lyrics-footer .ctrl-btn.active::after {
+    background: #fff;
+}
+
+.lyrics-page .lyrics-footer .ctrl-btn.play-btn {
+    background: rgba(255, 255, 255, 0.9);
+    color: #16181c;
+    box-shadow: 0 2px 14px rgba(0, 0, 0, 0.28);
+}
+
+.lyrics-page .lyrics-footer .ctrl-btn.play-btn:hover {
+    background: #fff;
+    transform: scale(1.03);
+}
+
+.lyrics-page .lyrics-footer .favorite-btn,
+.lyrics-page .lyrics-footer .right-icon-btn {
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    color: rgba(255, 255, 255, 0.94);
+}
+
+.lyrics-page .lyrics-footer .favorite-btn:hover,
+.lyrics-page .lyrics-footer .right-icon-btn:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: #fff;
+}
+
+.lyrics-page .lyrics-footer .favorite-btn.favorited {
+    color: #ff5a86;
+}
+
+/* 深色底上的文字与进度/音量条 */
+.lyrics-page .lyrics-footer .player-track-name {
+    color: #fff;
+}
+
+.lyrics-page .lyrics-footer .player-track-artist {
+    color: rgba(255, 255, 255, 0.62);
+}
+
+.lyrics-page .lyrics-footer .time-label {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* 深色底栏上的进度条：只换颜色变量，尺寸与主界面保持一致。
+   波浪滑块由 canvas 绘制（components/WaveProgress.tsx），轨道与手柄都取这两个变量。 */
+.lyrics-page .lyrics-footer .progress-slider {
+    --wp-track: rgba(255, 255, 255, 0.24);
+    --wp-active: rgba(255, 255, 255, 0.92);
+}

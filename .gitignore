@@ -1,0 +1,21 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+.idea/
+.vscode/
+*.log
+.build/
+
+# 本地文档与设计稿：仓库只保留软件本体（这些文件仍留在本地）
+/docs/
+*.md
+!README.md
+demo.html
+ui-lyrics.png
+*.webp
+样式设计.html
+歌词页设计.html
+Oberon技术文档.md
+.dsh-settings.backup.yaml
+磨砂玻璃风音乐播放器界面.png
