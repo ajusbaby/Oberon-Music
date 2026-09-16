@@ -73,7 +73,9 @@ Write-Host "[publish] version=$version tag=$tag" -ForegroundColor Cyan
 # --- make sure the tag exists on the remote ---
 & $gh api "repos/$repo/git/ref/tags/$tag" *> $null
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "[publish] tag $tag is not on the remote yet; pushing it..." -ForegroundColor Yellow
+  Write-Host "[publish] tag $tag is not on the remote yet; creating and pushing it..." -ForegroundColor Yellow
+  # 本地没有就建（已存在时 git tag 会报错，无害）
+  git tag -a $tag -m "Oberon $version" 2>$null
   git push origin $tag
   if ($LASTEXITCODE -ne 0) { Write-Host "[publish] failed to push tag $tag" -ForegroundColor Red; exit 1 }
 }
