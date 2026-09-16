@@ -273,7 +273,9 @@ impl Iterator for AdtsAacSource {
 
 impl Source for AdtsAacSource {
     fn current_span_len(&self) -> Option<usize> {
-        None
+        // ⚠️ 必须返回 Some：见 engine/opus.rs 里的说明 —— 返回 None 会让混音器的采样率
+        // 转换比在换源后失效，下一首会按上一首的采样率播放（变速/变调）。
+        Some((self.out.len() - self.pos).max(1))
     }
     fn channels(&self) -> ChannelCount {
         NonZero::new(self.channels).unwrap_or(NonZero::new(2).expect("2 非零"))

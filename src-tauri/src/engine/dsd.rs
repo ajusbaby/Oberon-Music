@@ -319,7 +319,9 @@ impl Iterator for DsdSource {
 
 impl Source for DsdSource {
     fn current_span_len(&self) -> Option<usize> {
-        None
+        // ⚠️ 必须返回 Some：见 engine/opus.rs 里的说明 —— 返回 None 会让混音器的采样率
+        // 转换比在换源后失效，下一首会按上一首的采样率播放（变速/变调）。
+        Some((self.out.len() - self.pos).max(1))
     }
     fn channels(&self) -> ChannelCount {
         NonZero::new(self.channels).unwrap_or(NonZero::new(2).expect("2 非零"))
@@ -427,7 +429,6 @@ pub fn probe(path: &str) -> Option<DsdMeta> {
     }
     Some(meta)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +498,67 @@ mod tests {
         std::fs::write(&p, &f).unwrap();
         p
     }
+
+/// 44.1k 单声道 16bit WAV —— 和 DSD 的 88.2k/立体声不同，正好检验换源后的转换比
+    fn make_wav_44k(name: &str, freq: f32, seconds: f32) -> std::path::PathBuf {
+        let rate: u32 = 44_100;
+        let n = (rate as f32 * seconds) as u32;
+        let mut pcm = Vec::with_capacity(n as usize * 2);
+        for i in 0..n {
+            let v = (2.0 * std::f32::consts::PI * freq * i as f32 / rate as f32).sin() * 0.5;
+            pcm.extend_from_slice(&((v * 32767.0) as i16).to_le_bytes());
+        }
+        let mut w = Vec::new();
+        let len = pcm.len() as u32;
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + len).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes());
+        w.extend_from_slice(&rate.to_le_bytes());
+        w.extend_from_slice(&(rate * 2).to_le_bytes());
+        w.extend_from_slice(&2u16.to_le_bytes());
+        w.extend_from_slice(&16u16.to_le_bytes());
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&len.to_le_bytes());
+        w.extend_from_slice(&pcm);
+        let p = std::env::temp_dir().join(name);
+        std::fs::write(&p, &w).unwrap();
+        p
+    }
+
+    /// 端到端回归：DSD(88.2k) 播完接一首 44.1k 的曲子，**不能沿用上一首的采样率**转换。
+    /// 症状是下一首以 2 倍速播放（用户报的「切歌后声音奇怪且加速」）。
+    /// 不用音频设备：建一个混音器，把两个音源追加到同一个 Player，数混音输出多少帧。
+    #[test]
+    fn handoff_after_dsd_does_not_reuse_previous_rate() {
+        use std::num::NonZero;
+        let dsd = make_dsf_at("oberon_dsd_handoff.dsf", 1000.0, 0.2, 2);
+        let wav = make_wav_44k("oberon_handoff.wav", 2000.0, 0.4);
+        let (mixer, mut out) = rodio::mixer::mixer(
+            NonZero::new(2).unwrap(),
+            NonZero::new(48_000).unwrap(),
+        );
+        let player = rodio::Player::connect_new(&mixer);
+        player.append(DsdSource::open(dsd.to_str().unwrap()).expect("dsd"));
+        player.append(crate::engine::audio::open_decoder(wav.to_str().unwrap()).expect("wav"));
+        // 混音器对空输入会一直吐静音、不会结束，所以数总帧数没有意义 ——
+        // 改测「音频内容持续到第几秒」：DSD 0.2s + WAV 0.4s = 0.6s；
+        // 若下一首被按 88.2k 转换，WAV 会被 2 倍速吞掉，内容只到约 0.4s。
+        let buf: Vec<f32> = out.take(48_000 * 2 * 3).collect();
+        let last_loud = buf
+            .chunks(2)
+            .rposition(|c| c.iter().any(|s| s.abs() > 0.01))
+            .unwrap_or(0);
+        let content_secs = (last_loud + 1) as f64 / 48_000.0;
+        eprintln!("[test] 音频内容持续到 {content_secs:.3}s（期望约 0.600s）");
+        assert!(
+            content_secs > 0.55,
+            "内容只到 {content_secs:.3}s（应约 0.600s）—— 下一首被按上一首的采样率转换了（会变速）"
+        );
+    }
+
 
     fn goertzel(samples: &[f32], stride: usize, rate: f32, freq: f32) -> f32 {
         let n = samples.len() / stride;

@@ -136,7 +136,13 @@ impl Iterator for OpusSource {
 
 impl Source for OpusSource {
     fn current_span_len(&self) -> Option<usize> {
-        None
+        // ⚠️ 这里**必须**返回 Some，不能返回 None。
+        // rodio 的 SourcesQueueOutput::current_span_len()（queue.rs:151）会把当前音源的返回值
+        // 原样转发，而 UniformSourceIterator 用它决定「重新采样窗口」：
+        // 返回 None ⇒ Take{n:None} 吞掉整个队列 ⇒ 混音器的采样率转换比只在最开始算一次
+        // ⇒ 换到下一首时仍沿用上一首的采样率去转换。
+        // 症状：DSD(88.2k) 之后接 44.1k 的曲子会以 **2 倍速**播放（用户报的「奇怪且加速」）。
+        Some((self.valid - self.pos).max(1))
     }
     fn channels(&self) -> ChannelCount {
         NonZero::new(self.channels).unwrap_or(NonZero::new(2).expect("2 非零"))
