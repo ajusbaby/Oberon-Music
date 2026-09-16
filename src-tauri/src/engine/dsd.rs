@@ -22,7 +22,7 @@ use crate::error::{AppError, E_DECODE};
 use dsd_reader::DsdReader;
 // id3 的 title()/artist()/... 来自 TagLike trait，不是 Tag 的固有方法
 use id3::TagLike;
-use rodio::source::Source;
+use rodio::source::{SeekError, Source};
 use rodio::{ChannelCount, SampleRate};
 use std::fs::File;
 use std::io::Read;
@@ -61,6 +61,13 @@ fn is_dsd_container(path: &str) -> bool {
 const TAPS: usize = 256;
 /// 目标输出采样率（优先 88.2k，其次 96k）
 const TARGET_RATES: [u32; 2] = [88_200, 96_000];
+
+/// rodio 0.22 的 SeekError::NotSupported 是带字段的变体
+fn seek_unsupported() -> SeekError {
+    SeekError::NotSupported {
+        underlying_source: "dsd",
+    }
+}
 
 /// DSF / DFF 的元数据（lofty 不支持 DSD，扫描层只能从这里拿）
 pub struct DsdMeta {
@@ -129,6 +136,12 @@ fn duration_of(bytes: u64, rate: u32, channels: u32) -> Duration {
 
 pub struct DsdSource {
     iter: dsd_reader::DsdIter,
+    /// 重新打开容器要用（DsdIter 没有定位接口，seek 只能重开 + 按块跳过）
+    path: String,
+    /// 原始 DSD 采样率（Hz）
+    dsd_rate_hz: u32,
+    /// 容器块大小（字节/声道）：seek 必须按整块对齐，否则 DSF 的声道交错会错位
+    block_size: u32,
     channels: u16,
     sample_rate: u32,
     decim: usize,
@@ -162,6 +175,7 @@ impl DsdSource {
         let decim = pick_decimation(rate_hz);
         let out_rate = rate_hz / decim;
         let total = Some(duration_of(reader.audio_length(), rate_hz, channels as u32));
+        let block_size = reader.block_size();
         let iter = reader
             .dsd_iter()
             .map_err(|e| AppError::new(E_DECODE, format!("无法读取 DSD 数据: {e}")))?;
@@ -169,6 +183,9 @@ impl DsdSource {
         let taps = design_lowpass(cutoff / decim as f32);
         Ok(Self {
             iter,
+            path: path.to_string(),
+            dsd_rate_hz: rate_hz,
+            block_size,
             channels: channels as u16,
             sample_rate: out_rate,
             decim: decim as usize,
@@ -283,6 +300,44 @@ impl Source for DsdSource {
     }
     fn total_duration(&self) -> Option<Duration> {
         self.total
+    }
+
+    /// 原地定位。
+    ///
+    /// ⚠️ 这个实现是**必须的**，不是为了精确 —— 没有它，rodio 的原地 seek 会失败，
+    /// 引擎就退回「重开解码器 + 逐样本排水到目标」那条路（见 engine/mod.rs 的 seek_to）：
+    /// 那会把整段 DSD 重新过一遍 FIR，186MB 的文件等于几十亿次乘加 —— 表现就是**快进卡死**。
+    ///
+    /// DsdIter 不提供定位，所以只能：重开容器（只解析头，O(1)）+ 按**整块**跳过
+    /// （只读字节、不做任何滤波/解码）。跳过是纯 I/O，186MB 也就百毫秒级。
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        let reader = DsdReader::from_container(PathBuf::from(&self.path))
+            .map_err(|_| seek_unsupported())?;
+        let mut iter = reader.dsd_iter().map_err(|_| seek_unsupported())?;
+
+        // 目标：按声道要跳过多少字节；再向下对齐到整块
+        let bits = (pos.as_secs_f64() * self.dsd_rate_hz as f64) as u64;
+        let block_bytes = self.block_size.max(1) as u64;
+        let mut blocks = (bits / 8) / block_bytes;
+        if blocks == 0 {
+            // 回到开头：直接换上新迭代器即可
+        }
+        while blocks > 0 {
+            match iter.next() {
+                Some(_) => blocks -= 1,
+                None => break,
+            }
+        }
+        self.iter = iter;
+        // 滤波状态整体重来：256 个输入样本只有 0.09ms，听不出来
+        for c in self.carry.iter_mut() {
+            c.clear();
+        }
+        self.n_in = 0;
+        self.out.clear();
+        self.pos = 0;
+        self.ended = false;
+        Ok(())
     }
 }
 
@@ -448,6 +503,26 @@ mod tests {
         assert!(m1k > 0.05, "1kHz 幅度太小（滤波把信号也滤掉了？）: {m1k}");
         assert!(m1k > m500 * 3.0, "1k({m1k}) 未显著高于 500({m500})");
         assert!(m1k > m5k * 3.0, "1k({m1k}) 未显著高于 5k({m5k})");
+    }
+
+
+    /// 快进必须走「原地定位」，不能退回「排水」——
+    /// 后者会把整段 DSD 重新过一遍 FIR，186MB 的文件就是几十亿次乘加（用户报的卡死）。
+    #[test]
+    fn seek_is_cheap_and_correct() {
+        let p = make_dsf(1000.0, 1.0, 2);
+        let mut src = DsdSource::open(p.to_str().unwrap()).expect("open");
+        let t0 = std::time::Instant::now();
+        src.try_seek(Duration::from_secs_f64(0.75))
+            .expect("try_seek 必须成功：返回 Err 引擎就会退回排水 → 卡死");
+        let rest: Vec<f32> = src.by_ref().collect();
+        let elapsed = t0.elapsed();
+        // 1.0 - 0.75 = 0.25s；seek 会向下对齐到 4096 字节的整块，所以略少一点
+        let secs = rest.len() as f64 / (88_200.0 * 2.0);
+        assert!((secs - 0.257).abs() < 0.02, "seek 后剩余时长异常: {secs}");
+        let m1k = goertzel(&rest, 2, 88_200.0, 1000.0);
+        assert!(m1k > 0.05, "seek 之后信号不对（窗口/相位没接上？）: {m1k}");
+        eprintln!("[test] DSD seek 到 0.75s：剩余 {secs:.3}s，seek+解码耗时 {elapsed:?}");
     }
 
     /// 元数据支路（扫描层靠它把 DSD 收进库）

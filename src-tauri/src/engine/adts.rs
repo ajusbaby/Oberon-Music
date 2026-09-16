@@ -13,7 +13,7 @@
 //! seek 走默认实现（Err）→ 引擎的「重解码排水」兜底。
 
 use crate::error::{AppError, E_DECODE, E_FILE_UNAVAILABLE};
-use rodio::source::Source;
+use rodio::source::{SeekError, Source};
 use rodio::{ChannelCount, SampleRate};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
@@ -284,6 +284,41 @@ impl Source for AdtsAacSource {
     fn total_duration(&self) -> Option<Duration> {
         self.total
     }
+
+    /// 原地定位：逐个读 ADTS 帧头（每帧只读 7 字节）走到目标帧，再从那继续解码。
+    /// ⚠️ 必须实现：否则 rodio 的原地 seek 失败 → 引擎退回「重开解码器 + 逐样本排水」，
+    /// 大文件（几十 MB 的 .aac）会卡住引擎线程。
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        let err = || SeekError::NotSupported {
+            underlying_source: "adts",
+        };
+        let target_frames =
+            (pos.as_secs_f64() * self.sample_rate as f64 / AAC_FRAME_SAMPLES as f64) as u64;
+        self.file.seek(SeekFrom::Start(0)).map_err(|_| err())?;
+        let mut off = 0u64;
+        let mut n = 0u64;
+        let mut hdr = [0u8; 7];
+        while n < target_frames {
+            if self.file.seek(SeekFrom::Start(off)).is_err() {
+                break;
+            }
+            if self.file.read_exact(&mut hdr).is_err() {
+                break;
+            }
+            let Some(h) = parse_header(&hdr) else { break };
+            if (h.frame_len as u64) < 7 {
+                break;
+            }
+            off += h.frame_len as u64;
+            n += 1;
+        }
+        self.file.seek(SeekFrom::Start(off)).map_err(|_| err())?;
+        self.ts = n * AAC_FRAME_SAMPLES;
+        self.out.clear();
+        self.pos = 0;
+        self.ended = false;
+        Ok(())
+    }
 }
 
 /// 顺序走一遍 ADTS 帧头，数出一共多少帧（用于总时长）
@@ -357,6 +392,26 @@ mod tests {
             (declared - actual).abs() < 0.05,
             "帧头推算({declared:.3}s)与实际解码({actual:.3}s)不一致"
         );
+    }
+
+
+    /// 快进必须能原地定位（否则引擎退回排水，大 .aac 会卡住引擎线程）
+    #[test]
+    fn seek_then_decode_continues() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../.build/samples/ct_faac-adts.aac");
+        if !p.exists() {
+            return;
+        }
+        let mut src = AdtsAacSource::open(p.to_str().unwrap()).expect("open");
+        let t0 = std::time::Instant::now();
+        src.try_seek(Duration::from_secs_f64(10.0))
+            .expect("try_seek 必须成功");
+        let samples: Vec<f32> = src.by_ref().take(44_100 * 2).collect();
+        eprintln!("[test] ADTS seek 到 10s：耗时 {:?}，取到 {} 样本", t0.elapsed(), samples.len());
+        assert!(samples.len() >= 44_100, "seek 后应能继续解码: {}", samples.len());
+        let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.001, "seek 后解出来是静音（peak={peak}）");
     }
 
     /// 真样本端到端：解码 1 秒，检查采样率/声道/非静音
