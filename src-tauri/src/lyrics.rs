@@ -88,6 +88,17 @@ fn embedded(path: &Path) -> Option<String> {
     use lofty::file::TaggedFileExt;
     use lofty::tag::ItemKey;
 
+    // DSD（.dsf/.dff）：lofty 完全不支持这两种容器，下面的 Probe::open 必然失败，
+    // 所以内嵌歌词必须改走 id3（USLT）。同目录 .lrc 那条路与格式无关，不受影响。
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "dsf" || ext == "dff" {
+        return crate::engine::dsd::embedded_lyrics(path.to_string_lossy().as_ref());
+    }
+
     let tagged = lofty::probe::Probe::open(path).ok()?.read().ok()?;
     for tag in tagged.tags() {
         for key in [ItemKey::Lyrics, ItemKey::UnsyncLyrics] {

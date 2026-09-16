@@ -69,6 +69,35 @@ fn seek_unsupported() -> SeekError {
     }
 }
 
+
+/// 读 .dsf/.dff 的**内嵌歌词**。
+///
+/// ⚠️ 为什么必须单独开这个口子：歌词链路的「内嵌标签」分支用的是 lofty 的
+/// `Probe::open()`（见 src/lyrics.rs），而 **lofty 完全不支持 .dsf/.dff** —— 对 DSD 直接失败，
+/// 于是「刷进标签里的歌词」永远读不出来（用户报的正是这个）。
+/// 这里用 id3 读 USLT（未同步歌词）帧，也就是绝大多数刷歌词工具写进去的那个帧。
+pub fn embedded_lyrics(path: &str) -> Option<String> {
+    if !is_dsd_container(path) {
+        return None;
+    }
+    let Ok(reader) = DsdReader::from_container(PathBuf::from(path)) else {
+        return None;
+    };
+    let Some(tag) = reader.tag().as_ref() else {
+        eprintln!("[lyrics] {}：DSD 文件里没有内嵌 ID3 标签", path);
+        return None;
+    };
+    for l in tag.lyrics() {
+        let t = l.text.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    let ids: Vec<String> = tag.frames().map(|x| x.id().to_string()).collect();
+    eprintln!("[lyrics] {}：DSD 标签里没有 USLT 歌词帧；现有帧 = {:?}", path, ids);
+    None
+}
+
 /// DSF / DFF 的元数据（lofty 不支持 DSD，扫描层只能从这里拿）
 pub struct DsdMeta {
     pub title: String,
@@ -407,6 +436,11 @@ mod tests {
     /// 1-bit 流用**二阶 sigma-delta** 编码（比一阶的信噪比好很多，否则测试测的是编码噪声）。
     /// 数据按 DSF 规范以 block_size 为单位**逐声道分块交错**存放。
     fn make_dsf(freq: f32, seconds: f32, channels: usize) -> std::path::PathBuf {
+        make_dsf_at("oberon_dsd_test.dsf", freq, seconds, channels)
+    }
+
+    /// 每个测试用**独立文件名** —— 它们在同一个进程里并行跑，共用路径会互相踩
+    fn make_dsf_at(name: &str, freq: f32, seconds: f32, channels: usize) -> std::path::PathBuf {
         const RATE: u32 = 2_822_400; // DSD64
         const BLOCK: usize = 4096;
         // 取整数个块，避免尾部补齐导致「data 长度」与「sample count」不一致
@@ -459,7 +493,7 @@ mod tests {
         f.extend_from_slice(&(12 + data.len() as u64).to_le_bytes());
         f.extend_from_slice(&data);
 
-        let p = std::env::temp_dir().join("oberon_dsd_test.dsf");
+        let p = std::env::temp_dir().join(name);
         std::fs::write(&p, &f).unwrap();
         p
     }
@@ -523,6 +557,39 @@ mod tests {
         let m1k = goertzel(&rest, 2, 88_200.0, 1000.0);
         assert!(m1k > 0.05, "seek 之后信号不对（窗口/相位没接上？）: {m1k}");
         eprintln!("[test] DSD seek 到 0.75s：剩余 {secs:.3}s，seek+解码耗时 {elapsed:?}");
+    }
+
+
+    /// 内嵌歌词：lofty 读不了 .dsf，必须走 id3 —— 用户报的「刷了歌词但不显示」
+    #[test]
+    fn reads_embedded_lyrics_from_dsf() {
+        let p = make_dsf_at("oberon_dsd_lyrics.dsf", 1000.0, 0.3, 2);
+        let mut tag = id3::Tag::new();
+        tag.set_title("交换余生");
+        tag.add_frame(id3::frame::Lyrics {
+            lang: "eng".to_string(),
+            description: String::new(),
+            text: "[00:01.00]第一行\n[00:02.00]第二行".to_string(),
+        });
+        // 自己控制落盘位置：DSF 规范要求 ID3v2 放在**文件末尾**，并把头部偏移 20 的
+        // metadata pointer 指过去（id3 的 write_to_path 对 DSF 会猜错格式，所以只借它编码）
+        let mut tag_bytes = Vec::new();
+        tag.write_to(&mut tag_bytes, id3::Version::Id3v24).expect("编码 ID3");
+        let mut bytes = std::fs::read(&p).unwrap();
+        let offset = bytes.len() as u64;
+        bytes.extend_from_slice(&tag_bytes);
+        let total = bytes.len() as u64;
+        bytes[12..20].copy_from_slice(&total.to_le_bytes()); // 总文件大小
+        bytes[20..28].copy_from_slice(&offset.to_le_bytes()); // 标签位置
+        std::fs::write(&p, &bytes).unwrap();
+        assert!(is_dsd_container(p.to_str().unwrap()), "写标签后容器仍应完好");
+        let text = embedded_lyrics(p.to_str().unwrap()).expect("应能读出内嵌歌词");
+        assert!(text.contains("第一行"), "歌词内容不对: {text}");
+        // 完整链路：识别为内嵌歌词 + 带时间轴 + 两行
+        let l = crate::lyrics::load(p.to_str().unwrap());
+        assert_eq!(l.source, "embedded", "来源应为内嵌标签");
+        assert!(l.synced, "应解析出时间轴");
+        assert_eq!(l.lines.len(), 2, "行数不对");
     }
 
     /// 元数据支路（扫描层靠它把 DSD 收进库）
