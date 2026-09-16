@@ -89,7 +89,14 @@ if ($LASTEXITCODE -eq 0) {
   & $gh release upload $tag @files --clobber --repo $repo
 } else {
   Write-Host "[publish] creating release $tag" -ForegroundColor Green
-  & $gh release create $tag @files --repo $repo --title "Oberon $version" --verify-tag --latest --generate-notes
+  # 手写简介优先（scripts/release-notes.md）—— 里面会列出支持的格式；没有才用自动生成的提交列表
+  $notesFile = Join-Path $PSScriptRoot 'release-notes.md'
+  if (Test-Path $notesFile) {
+    Write-Host "[publish] using release notes from $notesFile"
+    & $gh release create $tag @files --repo $repo --title "Oberon $version" --verify-tag --latest --notes-file $notesFile
+  } else {
+    & $gh release create $tag @files --repo $repo --title "Oberon $version" --verify-tag --latest --generate-notes
+  }
 }
 if ($LASTEXITCODE -ne 0) { Write-Host "[publish] gh release command failed" -ForegroundColor Red; exit $LASTEXITCODE }
 
