@@ -157,8 +157,12 @@ pub fn spawn(app: tauri::AppHandle) -> EngineHandle {
 struct Pending {
     /// 下一首在队列里的下标
     idx: usize,
-    /// 预排发生时的**本曲**位置（秒）。之后位置明显小于它 ⇒ 已经换源了。
+    /// 预排发生时的**本曲**位置（秒）
     pos_at_prefetch: f64,
+    /// 上一个 tick 的位置：用来检测「换源导致位置回退」。
+    /// ⚠️ 只靠 pos_at_prefetch 是不够的 —— 时长小于预排提前量的短曲会在开头就预排，
+    ///    那时 pos_at_prefetch ≈ 0，条件永远不成立（见 run_engine 里的说明）。
+    last_pos: f64,
 }
 
 struct EngineCtx {
@@ -292,14 +296,29 @@ fn run_engine(
             // 每 tick 检查一次"该不该预排下一首"（不满足条件会立刻返回，成本可忽略）
             prefetch_next(&mut ctx, &app);
             // gapless：位置回退 ⇒ 预排的那首已经接着播了（只切逻辑状态，绝不碰音频）
-            let switched = match ctx.pending.as_ref() {
-                Some(p) if position_secs(&ctx) + 0.5 < p.pos_at_prefetch => {
-                    let idx = p.idx;
-                    ctx.pending = None;
-                    switch_to_prefetched(&mut ctx, idx, &app, &shared);
-                    true
+            // 预排的那首是否已经开始播了？
+            // ⚠️ 判据不能只有「位置回退到预排点之前」：时长小于 PREFETCH_LEAD_SECS 的短曲会在
+            //    开头就预排，此时 pos_at_prefetch ≈ 0 ⇒ 那个条件永远不成立 ⇒ pending 永远挂着；
+            //    而 pending.is_some() 会**禁用自然结束检测** ⇒ 界面永远停在上一首、之后再也不会推进
+            //    （用户报的「播完 Opus 后界面停在 Opus 上」就是这个）。
+            //    所以补一条通用判据：位置比上一 tick 明显回退（rodio 给每个追加的音源各自计时，
+            //    换源时位置会归零）。
+            let pos_now = position_secs(&ctx);
+            let switched = match ctx.pending.as_mut() {
+                Some(p) => {
+                    let fell_back = pos_now + 0.5 < p.pos_at_prefetch;
+                    let wrapped = pos_now + 0.5 < p.last_pos;
+                    p.last_pos = pos_now;
+                    if fell_back || wrapped {
+                        let idx = p.idx;
+                        ctx.pending = None;
+                        switch_to_prefetched(&mut ctx, idx, &app, &shared);
+                        true
+                    } else {
+                        false
+                    }
                 }
-                _ => false,
+                None => false,
             };
             // 没有预排时的自然结束：仍用原来的 empty() 判定（最后一首 / 预排失败 / 顺序到末尾）
             let ended = !switched
@@ -694,7 +713,13 @@ fn prefetch_next(ctx: &mut EngineCtx, app: &tauri::AppHandle) {
     // 节拍表会在本曲最后 PREFETCH_LEAD_SECS 秒里用错 α —— 那是装饰性律动，忽略。
     let at = position_secs(ctx);
     ctx.core.player_append(decoder, ctx.beat.clone());
-    ctx.pending = Some(Pending { idx: n, pos_at_prefetch: at });
+    eprintln!(
+        "[engine] 预排下一首 track_id={}（本曲 {:.1}s 处、剩余 {:.1}s）",
+        item.track_id,
+        at,
+        dur - at
+    );
+    ctx.pending = Some(Pending { idx: n, pos_at_prefetch: at, last_pos: at });
     let _ = app;
 }
 
@@ -718,6 +743,11 @@ fn switch_to_prefetched(
     ctx.idx = Some(idx);
     ctx.loaded = Some(ctx.queue[idx].clone());
     ctx.suppress_end = false;
+    eprintln!(
+        "[engine] 预排曲目已开始播放：track_id={} 位置基准={:.1}s",
+        ctx.queue[idx].track_id,
+        ctx.pos_base
+    );
     sync_shared(ctx, app, shared);
     emit_state_event(ctx, app);
     emit_progress(ctx, app);
@@ -987,7 +1017,9 @@ fn try_recover_device(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<
 fn seek_to(ctx: &mut EngineCtx, pos_secs: f64, app: &tauri::AppHandle) {
     // 预排的那首仍在队列里，只是"位置回退"的判定基准要跟着新的位置走
     if let Some(p) = ctx.pending.as_mut() {
+        // 跳转会让位置骤降，别让「回退判定」把它误判成换源
         p.pos_at_prefetch = pos_secs.max(0.0);
+        p.last_pos = pos_secs.max(0.0);
     }
     let Some(item) = ctx.loaded.clone() else { return };
     let was_paused = ctx.status == PlayerStatus::Paused;
@@ -1036,6 +1068,7 @@ fn seek_to(ctx: &mut EngineCtx, pos_secs: f64, app: &tauri::AppHandle) {
 
 /// 自然结束（单曲循环 / 自动下一首 / 队列末尾停止）
 fn on_natural_end(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerState>>) {
+    eprintln!("[engine] 自然结束：mode={:?} idx={:?}", ctx.play_mode, ctx.idx);
     match ctx.play_mode {
         PlayMode::LoopOne => {
             if let Some(i) = ctx.idx {
@@ -1579,7 +1612,7 @@ mod tests {
     fn device_wait_records_position_and_clears_transient_state() {
         let mut ctx = test_ctx(3, Some(1), PlayMode::LoopAll);
         ctx.loaded = Some(ctx.queue[1].clone());
-        ctx.pending = Some(Pending { idx: 2, pos_at_prefetch: 99.0 });
+        ctx.pending = Some(Pending { idx: 2, pos_at_prefetch: 99.0, last_pos: 99.0 });
         ctx.pos_base = 5.0;
 
         enter_device_wait(&mut ctx, 42.5);

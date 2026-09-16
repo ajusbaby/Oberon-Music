@@ -13,14 +13,12 @@ use opus_pure::{OggOpusReader, OpusDecoder};
 use rodio::source::Source;
 use rodio::{ChannelCount, SampleRate};
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::BufReader;
 use std::num::NonZero;
 use std::time::Duration;
 
 /// Opus 解码固定采样率（RFC 7845）
 const OPUS_RATE: u32 = 48_000;
-/// 从文件尾部读这么多字节来找最后一个 Ogg 页
-const TAIL_SCAN: u64 = 64 * 1024;
 
 pub struct OpusSource {
     reader: OggOpusReader<BufReader<File>>,
@@ -154,34 +152,33 @@ impl Source for OpusSource {
 /// 读文件尾部、找最后一个完整的 Ogg 页，返回它的 granule position。
 /// Ogg 页头布局：OggS(4) | version(1) | header_type(1) | granule(8, LE) | ...
 /// header_type 的 0x04 位是「流结束」，优先认它；找不到就退回最后一个 granule 合法的页。
+/// 走一遍分页，取最后一个有效的 granule position。
+/// 用库自己的解析器（页头有 CRC 校验）而不是自己去文件里搜 "OggS" —— Opus 的压缩数据里
+/// 完全可能碰巧出现 "OggS" 四个字节，那样会把随机字节当成总样本数，导致总时长离谱，
+/// 而总时长又被预排逻辑用来判断「什么时候该预排下一首」。
+/// 也不解码，只是分页，几千赫兹的页解析开销可以忽略。
 fn last_granule(path: &str) -> Option<u64> {
-    let mut f = File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
-    let start = len.saturating_sub(TAIL_SCAN);
-    f.seek(SeekFrom::Start(start)).ok()?;
-    let mut buf = vec![0u8; (len - start) as usize];
-    f.read_exact(&mut buf).ok()?;
-
-    let mut fallback = None;
-    for i in (0..buf.len().saturating_sub(14)).rev() {
-        if &buf[i..i + 4] != b"OggS" {
-            continue;
+    let file = File::open(path).ok()?;
+    let mut reader = OggOpusReader::new(BufReader::new(file)).ok()?;
+    let mut last = None;
+    let mut guard = 0u32;
+    loop {
+        match reader.read_packet() {
+            Ok(Some(p)) => {
+                // page_granule 是 i64，-1 表示「这页没有完整包」
+                if p.page_granule >= 0 {
+                    last = Some(p.page_granule as u64);
+                }
+            }
+            // 结束或坏包都停：见 opus-pure 的说明（截断文件会停下而不是打转）
+            Ok(None) | Err(_) => break,
         }
-        let header_type = buf[i + 5];
-        let mut g = [0u8; 8];
-        g.copy_from_slice(&buf[i + 6..i + 14]);
-        let granule = u64::from_le_bytes(g);
-        if granule == u64::MAX {
-            continue; // -1：这页没有完整包
-        }
-        if header_type & 0x04 != 0 {
-            return Some(granule);
-        }
-        if fallback.is_none() {
-            fallback = Some(granule);
+        guard += 1;
+        if guard > 5_000_000 {
+            break;
         }
     }
-    fallback
+    last
 }
 
 #[cfg(test)]
