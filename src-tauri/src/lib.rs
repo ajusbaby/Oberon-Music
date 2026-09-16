@@ -8,6 +8,7 @@ mod error;
 mod lyrics;
 mod models;
 mod scanner;
+mod smtc;
 mod state;
 mod watcher;
 
@@ -24,6 +25,17 @@ pub fn run() {
             let handle = app.handle().clone();
             let (state, watch_rx) = AppState::init(&handle)?;
             let state = Arc::new(state);
+
+            // 系统媒体控制（SMTC）：媒体键 / 蓝牙耳机 / 锁屏 / 系统媒体面板。
+            // 此时窗口已按配置建好（见 tauri::app::setup 的顺序），能拿到真正的 HWND。
+            // 任何失败都在内部静默降级成空句柄，绝不影响播放。
+            let smtc = smtc::init_for_app(
+                &handle,
+                state.engine.clone(),
+                state.db.clone(),
+                state.cover_dir.clone(),
+            );
+            state.engine.attach_smtc(smtc);
 
             // 目录监听线程
             let watcher_state = state.clone();

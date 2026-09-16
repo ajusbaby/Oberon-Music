@@ -31,6 +31,23 @@ rayon = "1.12"
 # 目录监听（增量更新）
 notify = "8.2"
 
+# Windows 系统媒体控制（SMTC）：媒体键 / 蓝牙耳机 / 锁屏 / 系统媒体面板。
+# 复用 tauri 与 wry 已经带进依赖树的 windows 0.61（见 Cargo.lock 的 windows 0.61.3），
+# 这里只补开 SMTC 需要的命名空间特性，不会引入第二份 windows crate。
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Foundation",
+    "Media",
+    "Storage",
+    "Storage_Streams",
+    "Win32_Foundation",
+    # CoreAudio：探默认输出端点的 DEVICE_STATE（判断耳机是真插着还是被拔了），
+    # 以及 SMTC 需要的 WinRT 互操作
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+] }
+
 [features]
 # 生产构建：前端资源嵌入二进制（tauri build 使用）
 custom-protocol = ["tauri/custom-protocol"]

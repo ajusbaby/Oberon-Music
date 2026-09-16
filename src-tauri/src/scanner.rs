@@ -6,7 +6,7 @@ use crate::db::{self, TrackMeta};
 use crate::error::{AppError, AppResult};
 use crate::models::{LibraryUpdatedPayload, ScanProgressPayload, ScanStage};
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -75,6 +75,21 @@ fn mark_done(control: &Arc<ScanControl>) {
     // 扫描期间有新的请求被合并时（pending），不在此递归启动，
     // 由命令层（scan_music_library）在 UI 动作后再次 request 即可。
     control.pending.store(false, Ordering::SeqCst);
+}
+
+/// 这个文件是否需要重新解析标签？
+/// 路径、修改时间（秒）与字节数三者全同才算「没变」—— 跳过它可以省掉一次标签读取
+/// 加一次内嵌封面解码，这正是把 1 万首库的重扫从几分钟压到几秒的关键。
+/// ⚠️ mtime <= 0 表示 stat 失败/时间不可用，必须当成「需要解析」：否则这个文件永远不再被重试。
+/// ⚠️ 库里没有这个路径 ⇒ 新文件，当然要解析。
+fn needs_reparse(known: &HashMap<String, (i64, i64)>, path: &str, mtime: i64, size: i64) -> bool {
+    if mtime <= 0 {
+        return true;
+    }
+    match known.get(path) {
+        Some(&(known_mtime, known_size)) => known_mtime != mtime || known_size != size,
+        None => true,
+    }
 }
 
 /// 主扫描流程（阻塞线程中执行；可随时取消）
@@ -155,6 +170,53 @@ fn run_scan(
     payload.total_files = Some(files.len() as u64);
     let _ = app.emit("scan-progress", &payload);
 
+    let total_files = files.len() as u64;
+
+    // ---- 阶段 1.5：未变文件跳过（增量扫描的核心） ----
+    // 旧实现对每个文件无条件 read_metadata（读标签 + 解码内嵌封面），而 file_mtime / file_size
+    // 虽然入了库却从没有任何地方读过它 —— 于是目录监听每次防抖触发的那次「增量扫描」，
+    // 实际是把整个曲库重新解析一遍（1 万首 = 每次几分钟）。
+    // 这里先 stat（极便宜）再与库里的 (mtime, size) 比对，只有新增/改动的文件才进解析。
+    // ⚠️ mtime 精度是秒（库里的 file_mtime 就是秒）：同一秒内改动两次且字节数不变会漏检。
+    //    这是拿「偶发漏检」换「每次全库重读标签」，与主流播放器的做法一致。
+    // ⚠️ seen 现在收集的是**磁盘上实际存在的全部文件**（含标签解析失败的），不再是「解析成功的」。
+    //    旧实现里某次标签解析失败的文件会被当成「已删除」而丢掉整行记录 —— 顺带修掉了。
+    // ⚠️ 数据库连接要在这里就打开（增量比对需要读现有记录），阶段 3 不再重开。
+    let conn = match db::open_db(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            payload.stage = ScanStage::Error;
+            payload.error = Some(format!("{e}"));
+            let _ = app.emit("scan-progress", &payload);
+            mark_done(&control);
+            return;
+        }
+    };
+
+    // 读不到现有记录时 known 为空 ⇒ 退化成全量解析
+    // （绝不能因为一次读库失败就认为「文件都没了」，那会让后面的差集删除清空曲库）
+    let known: HashMap<String, (i64, i64)> = db::all_track_file_stamps(&conn)
+        .map(|list| list.into_iter().map(|(_, path, mtime, size)| (path, (mtime, size))).collect())
+        .unwrap_or_default();
+
+    let mut to_parse: Vec<PathBuf> = Vec::with_capacity(files.len());
+    let mut seen: HashSet<String> = HashSet::with_capacity(files.len());
+    let mut done_base: u64 = 0;
+    for p in files {
+        let path = p.to_string_lossy().into_owned();
+        let mtime = mtime_secs(&p);
+        let size = std::fs::metadata(&p).map(|m| m.len() as i64).unwrap_or(0);
+        seen.insert(path.clone());
+        if needs_reparse(&known, &path, mtime, size) {
+            to_parse.push(p);
+        } else {
+            done_base += 1;
+        }
+    }
+    // 先把「已跳过」的部分报出去，进度条才不会在解析开始前一直停在 0
+    payload.scanned_files = done_base;
+    let _ = app.emit("scan-progress", &payload);
+
     // ---- 阶段 2：并行提取元数据（rayon） ----
     // ⚠️ 进度分子必须在这一步涨：读标签 + 生成封面缩略图才是整次扫描耗时的大头，
     //    旧实现只在上面的入库循环里涨分子，于是整段解析期间进度恒为 0（"进度条不动"）。
@@ -162,9 +224,8 @@ fn run_scan(
     //    时间节流发事件 —— 不节流的话 1 万首 = 1 万次 IPC + 1 万次前端重渲染。
     let parsed = AtomicU64::new(0);
     let last_emit_ms = AtomicI64::new(0);
-    let total_files = files.len() as u64;
     let root_label = roots.first().cloned();
-    let metas: Vec<(String, TrackMeta)> = files
+    let metas: Vec<(String, TrackMeta)> = to_parse
         .par_iter()
         .filter_map(|p| {
             if control.cancel.load(Ordering::SeqCst) {
@@ -187,7 +248,7 @@ fn run_scan(
                 Err(_) => None,
             };
             // —— 进度上报：每个文件都计数；100ms 节流，且同一时刻只允许一个线程发事件 ——
-            let done = parsed.fetch_add(1, Ordering::Relaxed) + 1;
+            let done = done_base + parsed.fetch_add(1, Ordering::Relaxed) + 1;
             let now = now_ms();
             let last = last_emit_ms.load(Ordering::Relaxed);
             if now - last >= PROGRESS_EMIT_MS
@@ -222,16 +283,7 @@ fn run_scan(
     }
 
     // ---- 阶段 3：入库（逐条 upsert，WAL 下读线程不受影响） ----
-    let conn = match db::open_db(&db_path) {
-        Ok(c) => c,
-        Err(e) => {
-            payload.stage = ScanStage::Error;
-            payload.error = Some(format!("{e}"));
-            let _ = app.emit("scan-progress", &payload);
-            mark_done(&control);
-            return;
-        }
-    };
+    // 连接已在阶段 1.5 打开（增量比对需要读现有记录），这里不再重开。
 
     // 整段一个事务。upsert_track 内部是 2 条语句（按 path 查 id + INSERT ... ON CONFLICT
     // RETURNING），不开事务时 1 万首 = 2 万条隐式事务，每条都要取写锁 + 写 WAL 帧，
@@ -249,14 +301,12 @@ fn run_scan(
         }
     };
 
-    let mut seen: HashSet<String> = HashSet::with_capacity(metas.len());
     let mut cancelled = false;
     for (i, (path, meta)) in metas.iter().enumerate() {
         if control.cancel.load(Ordering::SeqCst) {
             cancelled = true;
             break;
         }
-        seen.insert(path.clone());
         match db::upsert_track(&tx, meta) {
             Ok((_, existed)) => {
                 if existed {
@@ -269,8 +319,9 @@ fn run_scan(
                 payload.error = Some(format!("写入失败 {path}: {e}"));
             }
         }
-        // 分子在解析阶段就已经涨到 total；入库阶段只做单调保护，避免进度回退
-        payload.scanned_files = parsed.load(Ordering::Relaxed).max(i as u64 + 1);
+        // 分子在解析阶段就已经涨到 total（含阶段 1.5 跳过的 done_base）；
+        // 入库阶段只做单调保护，避免进度回退
+        payload.scanned_files = (done_base + i as u64 + 1).max(payload.scanned_files);
         if payload.scanned_files % 25 == 0 {
             let _ = app.emit("scan-progress", &payload);
         }
@@ -317,6 +368,17 @@ fn run_scan(
     payload.stage = ScanStage::Done;
     let _ = app.emit("scan-progress", &payload);
     let _ = app.emit("library-updated", updated_event);
+
+    // 一行可核对的收尾日志：增量扫描的效果直接从「未变跳过」这一项读出来
+    eprintln!(
+        "[scan] 完成：新增 {} / 更新 {} / 删除 {}；未变跳过 {} / 重新解析 {}（磁盘上共 {} 个音频文件）",
+        payload.added,
+        payload.updated,
+        payload.removed,
+        done_base,
+        to_parse.len(),
+        seen.len()
+    );
 
     if let Ok(g) = db.lock() {
         for root in &roots {
@@ -539,4 +601,59 @@ pub fn base64_encode(data: &[u8]) -> String {
         out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn known_one(path: &str, mtime: i64, size: i64) -> HashMap<String, (i64, i64)> {
+        let mut m = HashMap::new();
+        m.insert(path.to_string(), (mtime, size));
+        m
+    }
+
+    /// 路径 + mtime + size 三者全同 ⇒ 跳过（增量扫描的核心收益）
+    #[test]
+    fn unchanged_file_is_skipped() {
+        let known = known_one("C:/Music/a.flac", 1_700_000_000, 40_000_000);
+        assert!(!needs_reparse(&known, "C:/Music/a.flac", 1_700_000_000, 40_000_000));
+    }
+
+    /// 修改时间变了 ⇒ 必须重新解析（否则改过的标签/封面永远不刷新）
+    #[test]
+    fn changed_mtime_triggers_reparse() {
+        let known = known_one("C:/Music/a.flac", 1_700_000_000, 40_000_000);
+        assert!(needs_reparse(&known, "C:/Music/a.flac", 1_700_000_001, 40_000_000));
+    }
+
+    /// mtime 精度是秒：同一秒内改过、时间戳没变但字节数变了 ⇒ 也必须重新解析
+    #[test]
+    fn changed_size_triggers_reparse() {
+        let known = known_one("C:/Music/a.flac", 1_700_000_000, 40_000_000);
+        assert!(needs_reparse(&known, "C:/Music/a.flac", 1_700_000_000, 40_000_001));
+    }
+
+    /// 库里没有这个路径 ⇒ 新文件，要解析
+    #[test]
+    fn unknown_path_triggers_reparse() {
+        let known = known_one("C:/Music/a.flac", 1_700_000_000, 40_000_000);
+        assert!(needs_reparse(&known, "C:/Music/b.flac", 1_700_000_000, 40_000_000));
+    }
+
+    /// mtime 取不到（stat 失败）⇒ 绝不能当成「没变」，否则这个文件永远不再被重试
+    #[test]
+    fn zero_mtime_always_reparses() {
+        let known = known_one("C:/Music/a.flac", 0, 40_000_000);
+        assert!(needs_reparse(&known, "C:/Music/a.flac", 0, 40_000_000));
+        let known_ok = known_one("C:/Music/a.flac", 1_700_000_000, 40_000_000);
+        assert!(needs_reparse(&known_ok, "C:/Music/a.flac", 0, 40_000_000));
+    }
+
+    /// 空表（比如读 stamps 失败后的退化值）⇒ 一律解析，等于退回全量扫描
+    #[test]
+    fn empty_known_reparses_everything() {
+        let known: HashMap<String, (i64, i64)> = HashMap::new();
+        assert!(needs_reparse(&known, "C:/Music/a.flac", 1, 1));
+    }
 }

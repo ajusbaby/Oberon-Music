@@ -209,7 +209,7 @@ export default function App() {
     };
   }, []);
 
-  // 全局快捷键：空格播放/暂停（输入框内不响应）
+  // 全局快捷键（输入框内不响应）：空格 播放/暂停，←/→ 上一首/下一首，Esc 关弹层
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement;
@@ -219,6 +219,12 @@ export default function App() {
       if (e.code === "Space") {
         e.preventDefault();
         void usePlayerStore.getState().toggle();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        void usePlayerStore.getState().previous();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        void usePlayerStore.getState().next();
       } else if (e.key === "Escape") {
         useUiStore.getState().closeDialog();
         useUiStore.getState().closeQueue();

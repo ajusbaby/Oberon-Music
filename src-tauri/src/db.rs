@@ -243,6 +243,15 @@ pub fn track_by_id(conn: &Connection, id: i64) -> AppResult<Option<Track>> {
     Ok(conn.query_row(&sql, params![id], row_to_track).optional()?)
 }
 
+/// 全部曲目的 (id, 路径, 修改时间秒, 文件字节数)。
+/// 供扫描做「未变文件跳过」的差集比对：一次把整表读进内存，好过对每个文件各查一次库
+/// （N 次查询往返 → 1 次）。file_mtime 为 0 表示当年 stat 失败，调用方不得据此跳过。
+pub fn all_track_file_stamps(conn: &Connection) -> AppResult<Vec<(i64, String, i64, i64)>> {
+    let mut stmt = conn.prepare("SELECT id, path, file_mtime, file_size FROM tracks")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
 /// 按 id 集合取歌曲（保持传入顺序），用于播放队列构建
 pub fn tracks_by_ids(conn: &Connection, ids: &[i64]) -> AppResult<Vec<Track>> {
     if ids.is_empty() {

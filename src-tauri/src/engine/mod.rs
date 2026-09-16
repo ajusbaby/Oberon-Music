@@ -11,10 +11,11 @@ pub mod beat;
 
 use crate::error::{AppError, AppResult};
 use crate::models::*;
-use audio::{open_decoder, seek_decoder, CoreAudio};
+use crate::smtc::SmtcHandle;
+use audio::{endpoint_active, open_decoder, probe_default_output, seek_decoder, CoreAudio, DefaultOutput};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Emitter;
 
@@ -52,6 +53,20 @@ const PREFETCH_LEAD_SECS: f64 = 12.0;
 /// 阈值两侧（2.9 / 3.0 / 3.1）分别断言。
 const PREVIOUS_RESTART_THRESHOLD_SECS: f64 = 3.0;
 
+/// 输出设备停滞判定的窗口：Playing 状态下位置连续这么多 tick（50ms × 60 = 3 秒）不前进，
+/// 就认为音频流已经死了（设备被拔掉 / 被切走 / 被独占抢走 / 被系统静音重置）。
+/// 播放位置由音频回调按真实时间推进，正常播放时每个 tick 都会前进 ⇒ 3 秒不动必然是异常。
+const STALL_TICKS: u64 = 60;
+
+/// 设备失效后「优先等原来那台设备回来」的时长（tick 数）：50ms × 160 = 8 秒。
+/// 超时后改为跟随系统默认设备 —— 用户拔耳机也可能就是想换到别的设备上放。
+const DEVICE_WAIT_GRACE_TICKS: u64 = 160;
+
+/// 等待输出设备回来时的重试间隔（tick 数）：50ms × 20 = 1 秒。
+/// ⚠️ 只做节流、不做次数上限 —— 拔掉耳机后设备可能很久都不在，而「插上耳机自动继续播放」
+/// 才是用户要的行为，放弃恢复就等于把这个场景永久弄坏（上一版就是这么坏的）。
+const DEVICE_RETRY_TICKS: u64 = 20;
+
 #[derive(Clone)]
 pub struct EngineHandle {
     tx: Sender<EngineCommand>,
@@ -60,9 +75,16 @@ pub struct EngineHandle {
     beat: Arc<beat::BeatMeter>,
     #[allow(dead_code)]
     alive: Arc<AtomicBool>,
+    /// 系统媒体控制句柄（setup 之后一次性填入，见 attach_smtc）
+    smtc: Arc<OnceLock<SmtcHandle>>,
 }
 
 impl EngineHandle {
+    /// 接入系统媒体控制（setup 之后一次性调用）。已填过时是空操作。
+    pub fn attach_smtc(&self, handle: SmtcHandle) {
+        let _ = self.smtc.set(handle);
+    }
+
     pub fn send(&self, cmd: EngineCommand) -> AppResult<()> {
         self.tx.send(cmd).map_err(|_| AppError::internal("播放引擎线程已退出"))
     }
@@ -108,15 +130,18 @@ pub fn spawn(app: tauri::AppHandle) -> EngineHandle {
     }));
     let alive = Arc::new(AtomicBool::new(true));
     let meter = beat::BeatMeter::new();
+    // SMTC 句柄由主线程稍后填入（那时才拿得到窗口句柄），引擎线程读同一个槽
+    let smtc = Arc::new(OnceLock::<SmtcHandle>::new());
     let shared2 = shared.clone();
     let alive2 = alive.clone();
     let meter2 = meter.clone();
+    let smtc2 = smtc.clone();
     std::thread::Builder::new()
         .name("audio-engine".into())
-        .spawn(move || run_engine(app, rx, shared2, alive2, meter2))
+        .spawn(move || run_engine(app, rx, shared2, alive2, meter2, smtc2))
         .expect("引擎线程创建失败");
 
-    EngineHandle { tx, shared, beat: meter, alive }
+    EngineHandle { tx, shared, beat: meter, alive, smtc }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +189,22 @@ struct EngineCtx {
     pending: Option<Pending>,
     /// 当前曲目在 Player 时间轴上的起点（换源后位置可能重置、也可能累计，见 switch_to_prefetched）
     pos_base: f64,
+    /// 系统媒体控制句柄槽（主线程在 setup 里填入）。空 ⇒ 所有 SMTC 通知退化为空操作。
+    smtc: Arc<OnceLock<SmtcHandle>>,
+    /// 看门狗：上一 tick 读到的播放位置（秒）
+    last_pos: f64,
+    /// 看门狗：位置连续未前进的 tick 数
+    stalled_ticks: u64,
+    /// 输出设备已失效，正在等它回来（拔掉耳机再插回、蓝牙断开重连等）
+    device_lost: bool,
+    /// 等待设备期间的重试节流计数
+    device_retry: u64,
+    /// 设备失效时记住的播放位置，恢复后从这里继续
+    resume_at: f64,
+    /// 本轮等待是否已经打过「设备还没就绪」的日志（避免每秒刷屏）
+    recover_logged: bool,
+    /// 本轮等待已经持续了多少 tick（用于给端点门禁加超时兜底）
+    wait_ticks: u64,
 }
 
 fn run_engine(
@@ -172,7 +213,11 @@ fn run_engine(
     shared: Arc<Mutex<PlayerState>>,
     alive: Arc<AtomicBool>,
     meter: Arc<beat::BeatMeter>,
+    smtc: Arc<OnceLock<SmtcHandle>>,
 ) {
+    // 本线程要调 CoreAudio 查默认输出端点状态：先把 COM 公寓准备好
+    audio::init_com_for_audio();
+
     let mut ctx = EngineCtx {
         core: CoreAudio::default(),
         queue: vec![],
@@ -192,6 +237,14 @@ fn run_engine(
         suppress_end: false,
         pending: None,
         pos_base: 0.0,
+        smtc,
+        last_pos: 0.0,
+        stalled_ticks: 0,
+        device_lost: false,
+        device_retry: 0,
+        resume_at: 0.0,
+        recover_logged: false,
+        wait_ticks: 0,
     };
     let mut tick: u64 = 0;
 
@@ -217,6 +270,19 @@ fn run_engine(
         // 进度事件仍按 ~800ms 节流：50ms × 16 = 800ms（唤醒周期改了，这里的倍数必须跟着改，
         // 否则进度事件会变成 200ms 一次、IPC 与前端重渲染翻 4 倍）。
         tick += 1;
+
+        // 输出流自己报错（设备被拔掉/被占用）—— 最可靠的设备失效信号，任何状态下都要收
+        // ⚠️ 这个标志每个 tick 都要取走：等待设备期间若任它积压，恢复成功的那一刻
+        // 会被这条陈旧错误立刻再打断一次（又是一次「从 0 重播」）。
+        let stream_error = ctx.core.take_device_error();
+        if stream_error && !ctx.device_lost {
+            enter_device_lost(&mut ctx, &app, &shared);
+        }
+        // 处在「等待设备回来」状态：先尝试恢复（拔掉耳机再插回来就走这条）
+        if ctx.device_lost {
+            try_recover_device(&mut ctx, &app, &shared);
+        }
+
         if ctx.status == PlayerStatus::Playing {
             // 每 tick 检查一次"该不该预排下一首"（不满足条件会立刻返回，成本可忽略）
             prefetch_next(&mut ctx, &app);
@@ -238,13 +304,18 @@ fn run_engine(
                 && ctx.core.player_empty();
             if ended {
                 on_natural_end(&mut ctx, &app, &shared);
-            } else if !switched && tick % 16 == 0 {
-                emit_progress(&ctx, &app);
-                // 同步刷新快照中的播放位置，避免 player_state 返回陈旧进度
-                if let Some(pos) = current_item(&ctx).map(|(_, np)| np.position_secs) {
-                    if let Ok(mut g) = shared.lock() {
-                        if let Some(cur) = g.current.as_mut() {
-                            cur.position_secs = pos;
+            } else if !switched {
+                // 看门狗必须每个 tick 都跑：设备失效后既不会有自然结束，也不会有任何
+                // 错误回调，唯一能观测到的现象就是「位置不再前进」。
+                watchdog_device(&mut ctx, &app, &shared);
+                if ctx.status == PlayerStatus::Playing && tick % 16 == 0 {
+                    emit_progress(&ctx, &app);
+                    // 同步刷新快照中的播放位置，避免 player_state 返回陈旧进度
+                    if let Some(pos) = current_item(&ctx).map(|(_, np)| np.position_secs) {
+                        if let Ok(mut g) = shared.lock() {
+                            if let Some(cur) = g.current.as_mut() {
+                                cur.position_secs = pos;
+                            }
                         }
                     }
                 }
@@ -257,6 +328,11 @@ fn run_engine(
 }
 
 fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerState>>) {
+    // 等待设备期间，用户的任何操作都立刻催一次恢复尝试：
+    // 否则「点播放没反应」看起来就像卡死了（设备已经回来时也能马上接上）。
+    if ctx.device_lost {
+        ctx.device_retry = DEVICE_RETRY_TICKS;
+    }
     match cmd {
         EngineCommand::SetQueue { items, start, autoplay } => {
             ctx.queue = items;
@@ -326,6 +402,8 @@ fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandl
         }
         EngineCommand::Stop => {
             let was_stopped = ctx.status == PlayerStatus::Stopped;
+            // 用户明确停止：取消「等待设备」状态，别在他停止之后又自己放起来
+            ctx.device_lost = false;
             ctx.status = PlayerStatus::Stopped;
             ctx.suppress_end = true;
             ctx.core.clear_player();
@@ -375,7 +453,18 @@ fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandl
 // 播放控制
 // ---------------------------------------------------------------------------
 
-/// 加载并播放队列第 i 首；失败时进入 Paused 并发 player-error 事件
+/// 单次装载的结果。
+/// 区分「设备问题」与「单曲问题」很重要：设备打不开时跳过这一首毫无意义（下一首同样打不开），
+/// 而单个文件坏掉时正相反 —— 应该继续往下找能播的。
+enum LoadAttempt {
+    Loaded,
+    DeviceError,
+    TrackError { code: String, message: String, track_id: i64 },
+}
+
+/// 加载并播放队列第 i 首。单个文件读不了时**自动跳过**到下一首可播曲目：
+/// 旧实现只把状态停在 Paused 并报一次错，用户必须一首首手动点过去 ——
+/// 一张专辑里混进几个损坏/被移走的文件时体验极差。
 fn load_and_play(ctx: &mut EngineCtx, i: usize, app: &tauri::AppHandle) {
     if i >= ctx.queue.len() {
         ctx.status = PlayerStatus::Stopped;
@@ -384,6 +473,59 @@ fn load_and_play(ctx: &mut EngineCtx, i: usize, app: &tauri::AppHandle) {
         ctx.core.clear_player();
         return;
     }
+    let mut next = i;
+    // 预算 = 队列长度：循环模式（列表循环 / 单曲循环 / 随机）的「下一首」会绕回起点，
+    // 没有预算约束就会在一条全是坏文件的队列里无限打转
+    let mut budget = ctx.queue.len();
+    let mut skipped: Vec<(String, String, i64)> = Vec::new();
+
+    loop {
+        match try_load(ctx, next) {
+            LoadAttempt::Loaded => break,
+            LoadAttempt::DeviceError => {
+                let track_id = ctx.loaded.as_ref().map(|t| t.track_id);
+                ctx.status = PlayerStatus::Paused;
+                ctx.loaded = None;
+                ctx.suppress_end = false;
+                emit_skip_report(app, &skipped);
+                // 打不开设备 ⇒ 进入「等待设备」而不是报一次错就结束：
+                // 这样「启动时没插设备、之后才插上」也能自动开始播放
+                // 只在「首次」进入等待时提示：等待期间用户按下一首之类会再走一次这里，
+                // 每次都弹就成了刷屏
+                let first = !ctx.device_lost;
+                enter_device_wait(ctx, 0.0);
+                if first {
+                    eprintln!("[engine] 打不开输出设备，等待设备接入后自动开始播放");
+                    emit_error(app, "AUDIO_DEVICE", "音频输出设备不可用，接入设备后会自动开始播放", track_id);
+                }
+                return;
+            }
+            LoadAttempt::TrackError { code, message, track_id } => {
+                skipped.push((code, message, track_id));
+                budget -= 1;
+                if budget == 0 {
+                    break;
+                }
+                // 用「自然结束」的推进语义找下一首：顺序模式到末尾就停，其余模式绕回。
+                // try_load 已经把 ctx.idx 设成失败的这一首，所以这里算出的是它后面那首。
+                match next_index(ctx, false) {
+                    Some(n) if n != next => next = n,
+                    _ => break,
+                }
+            }
+        }
+    }
+
+    if ctx.loaded.is_none() {
+        // 整轮下来一首都没能播：停住（调用方的 sync_shared 会把状态更新出去）
+        ctx.status = PlayerStatus::Paused;
+        ctx.suppress_end = false;
+    }
+    emit_skip_report(app, &skipped);
+}
+
+/// 装载队列第 i 首（不含跳歌逻辑）
+fn try_load(ctx: &mut EngineCtx, i: usize) -> LoadAttempt {
     let item = ctx.queue[i].clone();
     ctx.idx = Some(i);
     ctx.loaded = Some(item.clone());
@@ -392,14 +534,14 @@ fn load_and_play(ctx: &mut EngineCtx, i: usize, app: &tauri::AppHandle) {
     // 新建 Player ⇒ 时间轴重来：清掉 gapless 预排与位置基准
     ctx.pending = None;
     ctx.pos_base = 0.0;
+    // 换了音源：停滞看门狗重新计时
+    ctx.last_pos = 0.0;
+    ctx.stalled_ticks = 0;
 
     if ctx.core.new_player().is_err() {
-        ctx.status = PlayerStatus::Paused;
-        emit_error(app, "AUDIO_DEVICE", "无法打开音频输出设备（WASAPI）", Some(item.track_id));
-        return;
+        return LoadAttempt::DeviceError;
     }
-    let opened = open_decoder(&item.path);
-    match opened {
+    match open_decoder(&item.path) {
         Ok(decoder) => {
             let duration = audio::decoder_duration(&decoder).map(|d| d.as_secs_f64());
             if let Some(d) = duration {
@@ -416,13 +558,38 @@ fn load_and_play(ctx: &mut EngineCtx, i: usize, app: &tauri::AppHandle) {
             ctx.core.player_append(decoder, ctx.beat.clone());
             ctx.status = PlayerStatus::Playing;
             ctx.suppress_end = false;
+            LoadAttempt::Loaded
         }
         Err(e) => {
-            ctx.status = PlayerStatus::Paused;
             ctx.loaded = None;
             ctx.suppress_end = false;
-            emit_error(app, &e.code, &e.message, Some(item.track_id));
+            LoadAttempt::TrackError { code: e.code.to_string(), message: e.message.clone(), track_id: item.track_id }
         }
+    }
+}
+
+/// 上报本次装载跳过/失败的曲目。
+/// 只有一首时逐位保持旧行为（原样上报那一首的错误码与文案）；
+/// 多首时合并成一条 —— 否则一张专辑里 10 个坏文件就是 10 条 toast 刷屏。
+fn emit_skip_report(app: &tauri::AppHandle, skipped: &[(String, String, i64)]) {
+    // 跳歌是「用户看不见决策」的行为，落一条日志便于核对
+    if !skipped.is_empty() {
+        eprintln!(
+            "[engine] 跳过 {} 首无法播放的曲目（首个 track_id={}: {}）",
+            skipped.len(),
+            skipped[0].2,
+            skipped[0].1
+        );
+    }
+    match skipped {
+        [] => {}
+        [(code, message, track_id)] => emit_error(app, code, message, Some(*track_id)),
+        many => emit_error(
+            app,
+            &many[0].0,
+            &format!("已跳过 {} 首无法播放的歌曲（文件损坏、格式不支持或已被移动）", many.len()),
+            Some(many[0].2),
+        ),
     }
 }
 
@@ -440,6 +607,8 @@ fn load_paused(ctx: &mut EngineCtx, i: usize, app: &tauri::AppHandle) {
     // 新建 Player ⇒ 时间轴重来：清掉 gapless 预排与位置基准
     ctx.pending = None;
     ctx.pos_base = 0.0;
+    ctx.last_pos = 0.0;
+    ctx.stalled_ticks = 0;
     if ctx.core.new_player().is_err() {
         ctx.status = PlayerStatus::Paused;
         emit_error(app, "AUDIO_DEVICE", "无法打开音频输出设备（WASAPI）", Some(item.track_id));
@@ -553,6 +722,212 @@ fn resume_inner(ctx: &mut EngineCtx) {
     if ctx.core.sink_is_some() {
         ctx.core.player_play();
         ctx.status = PlayerStatus::Playing;
+    }
+}
+
+/// 设备停滞看门狗 —— **兜底**路径。
+/// 首选信号是 rodio 自己的输出流错误回调（见 audio.rs 的 take_device_error）：
+/// 设备被拔掉时它会明确报错，比这里猜要可靠得多。
+/// 这里保留位置探针，覆盖「流没报错但已经不推进」的失效形态：
+/// 连续 STALL_TICKS 个 tick 位置不动，就按设备失效处理。
+fn watchdog_device(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerState>>) {
+    if ctx.status != PlayerStatus::Playing || !ctx.core.sink_is_some() || ctx.suppress_end {
+        ctx.stalled_ticks = 0;
+        ctx.last_pos = position_secs(ctx);
+        return;
+    }
+    let pos = position_secs(ctx);
+    // 位置只要动过就重新计时（gapless 换源后可能回退，seek 后可能前跳，都算「活着」）
+    if (pos - ctx.last_pos).abs() > 0.02 {
+        ctx.last_pos = pos;
+        ctx.stalled_ticks = 0;
+        return;
+    }
+    ctx.last_pos = pos;
+    ctx.stalled_ticks += 1;
+    if ctx.stalled_ticks < STALL_TICKS {
+        return;
+    }
+    ctx.stalled_ticks = 0;
+    eprintln!(
+        "[engine] 播放位置停滞 {:.1}s，按输出设备失效处理",
+        STALL_TICKS as f64 * 0.05
+    );
+    enter_device_lost(ctx, app, shared);
+}
+
+/// 进入「等待输出设备回来」状态。
+/// ⚠️ 这里**刻意不重开设备**：拔掉耳机的那一刻往往根本没有设备可开，重开必然失败。
+/// 重开交给 try_recover_device 的每秒重试循环。
+fn enter_device_wait(ctx: &mut EngineCtx, resume_at: f64) {
+    // ⚠️ 无条件写入：调用方给出的才是这次要恢复的位置
+    // （设备失效时传当前进度；换歌 / 换队列时传 0.0）。
+    // 「重试失败不能丢掉位置」由 try_recover_device 自己显式写回 —— 一旦把这条不变量
+    // 藏进这里的条件分支，就会重演上一版的 bug：device_lost 永远清不掉。
+    ctx.resume_at = resume_at;
+    ctx.device_lost = true;
+    ctx.device_retry = 0;
+    ctx.recover_logged = false;
+    ctx.wait_ticks = 0;
+    ctx.pending = None;
+    ctx.pos_base = 0.0;
+    // 先丢掉失效的 sink：留着的话 new_player 里的 ensure() 会直接复用那个已经死掉的设备
+    ctx.core.reset_device();
+}
+
+/// 设备失效（错误回调 / 位置停滞 / 装载时打不开设备）后的统一处理：
+/// 记住位置、转暂停、提示一次，然后进入等待设备回来的循环
+fn enter_device_lost(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerState>>) {
+    if ctx.loaded.is_none() {
+        // 没有在播/在装的曲目：丢掉设备就行，不需要恢复流程
+        ctx.core.reset_device();
+        return;
+    }
+    let at = position_secs(ctx);
+    enter_device_wait(ctx, at);
+    ctx.status = PlayerStatus::Paused;
+    eprintln!("[engine] 输出设备失效（位置 {:.1}s），等待设备恢复…", at);
+    sync_shared(ctx, app, shared);
+    emit_error(
+        app,
+        "AUDIO_DEVICE",
+        "音频输出设备已断开（或已被其它程序占用），设备回来后会自动继续播放",
+        ctx.loaded.as_ref().map(|t| t.track_id),
+    );
+}
+
+/// 恢复目标的选择结果
+#[derive(Debug, PartialEq)]
+enum RecoverTarget {
+    /// 明确开这台设备（原设备回来了）
+    Original(String),
+    /// 跟随系统默认设备
+    FollowDefault,
+    /// 继续等待
+    KeepWaiting,
+}
+
+/// 恢复目标的选择（纯函数，单测覆盖）：
+/// - 原设备回到 ACTIVE ⇒ 开它。这是「插回耳机就该有声音」的关键 —— **绝不能退回默认设备**：
+///   拔掉耳机后系统默认会切到显示器 HDMI 音频那类常驻 ACTIVE 的端点（实测这台机器上就是），
+///   接到那台上不报错、位置照走、却永远没有声音。
+/// - 原设备还没回来且仍在宽限期内 ⇒ 继续等
+/// - 等够了 ⇒ 跟随系统默认设备（用户也可能就是想换到别的设备上放）
+fn choose_recover_target(
+    ours: Option<&str>,
+    ours_active: Option<bool>,
+    waited_ticks: u64,
+) -> RecoverTarget {
+    if ours_active == Some(true) {
+        if let Some(id) = ours {
+            return RecoverTarget::Original(id.to_string());
+        }
+    }
+    if waited_ticks >= DEVICE_WAIT_GRACE_TICKS {
+        RecoverTarget::FollowDefault
+    } else {
+        RecoverTarget::KeepWaiting
+    }
+}
+
+/// 等待设备期间的恢复循环：每 DEVICE_RETRY_TICKS（约 1 秒）尝试恢复一次，
+/// 成功就回到失效时记住的位置继续播放。
+///
+/// 关键不是「打开系统默认设备」，而是**打开我们原来那台设备**：
+/// 拔掉耳机后 Windows 会把默认输出切到另一台常驻可用的端点上（实测这台机器上是
+/// 「G24H2Classics」= 显示器的 HDMI 音频，DEVICE_STATE 一直 ACTIVE）。那台设备能打开、
+/// 不报错、位置照常推进，但当然推不出声音 —— 只盯着「默认设备」就会一路接到它上面，
+/// 表现正是「还没插回来自动就播了、插回耳机也没声音」。
+/// 所以这里优先按 id 等原设备回来；等够 DEVICE_WAIT_GRACE_TICKS 之后再跟随系统默认设备。
+fn try_recover_device(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerState>>) {
+    ctx.wait_ticks += 1;
+    ctx.device_retry += 1;
+    if ctx.device_retry < DEVICE_RETRY_TICKS {
+        return;
+    }
+    ctx.device_retry = 0;
+
+    let Some(idx) = ctx.idx else {
+        ctx.device_lost = false;
+        return;
+    };
+    let at = ctx.resume_at;
+
+    // endpoint_id 在 reset_device() 之后依然保留 —— 它就是「我们原来那台设备」
+    let ours = ctx.core.endpoint_id().map(|s| s.to_string());
+    let ours_state = ours.as_deref().and_then(endpoint_active);
+
+    // Some(id) = 明确开这台；None = 开系统默认设备
+    let target: Option<String> = match choose_recover_target(ours.as_deref(), ours_state, ctx.wait_ticks) {
+        RecoverTarget::Original(id) => Some(id),
+        RecoverTarget::FollowDefault => {
+            // 跟随系统默认设备之前，仍要确认默认端点真的 ACTIVE，
+            // 否则会接到一个「能打开却推不出声音」的端点上（上一版剩下的坑）
+            let blocked = match probe_default_output() {
+                DefaultOutput::Found { active: true, .. } => None,
+                DefaultOutput::Found { state, .. } => Some(format!("DEVICE_STATE={state}")),
+                DefaultOutput::Missing => Some("没有可用的输出设备".to_string()),
+                // 查不到（COM / 音频服务异常）就放行，别让诊断性查询把恢复卡死
+                DefaultOutput::Unknown => None,
+            };
+            if let Some(why) = blocked {
+                if !ctx.recover_logged {
+                    ctx.recover_logged = true;
+                    eprintln!("[engine] 系统默认输出端点不可用（{why}），继续等待");
+                }
+                return;
+            }
+            None
+        }
+        RecoverTarget::KeepWaiting => {
+            if !ctx.recover_logged {
+                ctx.recover_logged = true;
+                eprintln!(
+                    "[engine] 原输出设备（{}）尚未回来，继续等待；{} 秒后改为跟随系统默认设备",
+                    ctx.core.endpoint_name().unwrap_or("未知设备"),
+                    DEVICE_WAIT_GRACE_TICKS / DEVICE_RETRY_TICKS
+                );
+            }
+            return;
+        }
+    };
+
+    // 先丢弃失效的 sink：sink 还在的话 ensure_with 会直接返回 Ok 复用那个死设备
+    ctx.core.reset_device();
+    if ctx.core.ensure_with(target.as_deref()).is_err() {
+        if !ctx.recover_logged {
+            ctx.recover_logged = true;
+            eprintln!("[engine] 目标输出设备当前打不开，每秒重试中");
+        }
+        return;
+    }
+
+    // 先清掉等待标记再装载：load_and_play 在设备仍打不开时会自己把它重新置位（见它的
+    // DeviceError 分支）。但成败判定**不看这个标记**，而看「有没有真的开始播放」——
+    // 上一版的真凶正是回读这个标记：忘了先清它 ⇒ 每次都被判成失败，可它其实已经开播了，
+    // 于是每秒重开一次设备并从 0 重播，听感就是「一直循环播放这首歌的前 1 秒」。
+    ctx.device_lost = false;
+    ctx.status = PlayerStatus::Paused;
+    load_and_play(ctx, idx, app);
+
+    if ctx.status != PlayerStatus::Playing {
+        // 设备还没回来（load_and_play 已重新进入等待）或队列里没得播：位置留下，下一轮再试
+        ctx.resume_at = at;
+        return;
+    }
+    if at > 1.0 {
+        seek_to(ctx, at, app);
+    }
+    if ctx.status == PlayerStatus::Playing {
+        eprintln!(
+            "[engine] 输出已恢复：{}，从 {:.1}s 继续播放",
+            ctx.core.endpoint_name().unwrap_or("未知设备"),
+            at
+        );
+        sync_shared(ctx, app, shared);
+    } else {
+        // seek 之后没能保持播放（罕见）：别把恢复位置丢了
+        ctx.resume_at = at;
     }
 }
 
@@ -865,17 +1240,32 @@ fn emit_state_event(ctx: &EngineCtx, app: &tauri::AppHandle) {
         volume: ctx.volume,
         queue_index: if ctx.status == PlayerStatus::Stopped { None } else { ctx.idx },
         queue_len: ctx.queue.len(),
-        current,
+        current: current.clone(),
     };
     let _ = app.emit("player-state", payload);
+
+    // 系统媒体控制：播放状态与元数据跟着走。
+    // 曲目没变时也会发一次 set_track，但 SMTC 线程按 track_id 去重，不会重复解析封面。
+    if let Some(handle) = ctx.smtc.get() {
+        handle.set_status(ctx.status);
+        match current {
+            Some(np) => handle.set_track(np.track_id, &np.title, &np.artist, &np.album),
+            None => handle.clear(),
+        }
+    }
 }
 
 fn emit_progress(ctx: &EngineCtx, app: &tauri::AppHandle) {
     let Some((_, np)) = current_item(ctx) else { return };
+    let (position_secs, duration_secs) = (np.position_secs, np.duration_secs);
     let _ = app.emit(
         "player-progress",
-        ProgressPayload { track_id: np.track_id, position_secs: np.position_secs, duration_secs: np.duration_secs },
+        ProgressPayload { track_id: np.track_id, position_secs, duration_secs },
     );
+    // 系统媒体面板上的进度条（Windows 自行插值，800ms 一次足够）
+    if let Some(handle) = ctx.smtc.get() {
+        handle.set_progress(position_secs, duration_secs);
+    }
 }
 
 fn emit_error(app: &tauri::AppHandle, code: &str, message: &str, track_id: Option<i64>) {
@@ -954,6 +1344,14 @@ mod tests {
             suppress_end: false,
             pending: None,
             pos_base: 0.0,
+            smtc: Arc::new(OnceLock::new()),
+            last_pos: 0.0,
+            stalled_ticks: 0,
+            device_lost: false,
+            device_retry: 0,
+            resume_at: 0.0,
+            recover_logged: false,
+            wait_ticks: 0,
             beat: beat::BeatMeter::new(),
         }
     }
@@ -1079,5 +1477,58 @@ mod tests {
         assert_eq!(manual_next(2, true), None);     // 自然结束停止
         assert_eq!(manual_next(0, true), Some(1));
         assert_eq!((2 + 1) % len, 0);
+    }
+
+    /// 恢复目标的选择直接决定「插回耳机有没有声音」，所以单独守住：
+    /// 关键不变量是**原设备回来了就必须开原设备**，而不是退回系统默认设备 ——
+    /// 拔掉耳机后默认会被切到显示器 HDMI 音频那类常驻 ACTIVE 的端点，
+    /// 一旦退回默认就是「在播放、进度在走、耳机没声」。
+    #[test]
+    fn recovery_prefers_the_original_endpoint() {
+        // 原设备回到 ACTIVE：无论等了多久，都必须开它
+        assert_eq!(
+            choose_recover_target(Some("hp"), Some(true), 10_000),
+            RecoverTarget::Original("hp".to_string())
+        );
+        // 还没回来（UNPLUGGED/NOTPRESENT）且仍在宽限期内：继续等
+        assert_eq!(choose_recover_target(Some("hp"), Some(false), 5), RecoverTarget::KeepWaiting);
+        assert_eq!(choose_recover_target(Some("hp"), None, 5), RecoverTarget::KeepWaiting);
+        // 刚好到宽限期：改为跟随系统默认
+        assert_eq!(
+            choose_recover_target(Some("hp"), Some(false), DEVICE_WAIT_GRACE_TICKS),
+            RecoverTarget::FollowDefault
+        );
+        assert_eq!(
+            choose_recover_target(Some("hp"), None, DEVICE_WAIT_GRACE_TICKS),
+            RecoverTarget::FollowDefault
+        );
+        // 没有记录到原设备（例如首次打开就失败）：只能跟随默认
+        assert_eq!(
+            choose_recover_target(None, None, DEVICE_WAIT_GRACE_TICKS),
+            RecoverTarget::FollowDefault
+        );
+    }
+
+    /// enter_device_wait 把「等待设备」所需的即时状态一次性摆正。
+    /// ⚠️ 恢复位置是**无条件**写入的：调用方给什么就是什么（换歌 / 换队列时传 0.0）。
+    /// 「重试失败不能丢掉位置」这条不变量由 try_recover_device 显式写回 —— 上一版把它藏在
+    /// 这里的条件分支里，直接导致 device_lost 永远清不掉、恢复循环变成每秒重播。
+    #[test]
+    fn device_wait_records_position_and_clears_transient_state() {
+        let mut ctx = test_ctx(3, Some(1), PlayMode::LoopAll);
+        ctx.loaded = Some(ctx.queue[1].clone());
+        ctx.pending = Some(Pending { idx: 2, pos_at_prefetch: 99.0 });
+        ctx.pos_base = 5.0;
+
+        enter_device_wait(&mut ctx, 42.5);
+        assert!(ctx.device_lost, "应进入等待设备状态");
+        assert_eq!(ctx.resume_at, 42.5, "应记住恢复位置");
+        assert_eq!(ctx.device_retry, 0);
+        assert!(ctx.pending.is_none(), "预排要作废");
+        assert_eq!(ctx.pos_base, 0.0, "位置基准要归零");
+
+        // 换歌 / 换队列时用得上：无条件覆盖
+        enter_device_wait(&mut ctx, 0.0);
+        assert_eq!(ctx.resume_at, 0.0);
     }
 }
