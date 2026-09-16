@@ -3,6 +3,20 @@
 Oberon —— 基于 Tauri 2 的 Windows 本地音乐播放器：React + TypeScript 前端（严格按《样式设计.html》实现磨砂玻璃 UI），
 Rust 播放内核（symphonia 解码 / rodio + cpal 输出 / SQLite 曲库 / 目录监听增量扫描）。
 
+## 界面预览
+
+**首页 · 封面流**：点击中间封面播放，拖动 / 滚轮切换专辑
+
+![首页 - 封面流](screenshots/home.png)
+
+**沉浸歌词页**：逐行高亮 + 双语对照
+
+![沉浸歌词页](screenshots/lyrics.png)
+
+**我的收藏**：收藏的曲目集中在一处
+
+![我的收藏](screenshots/favorites.png)
+
 ## 目录结构
 
 ```
@@ -118,29 +132,6 @@ node scripts/ui-shot.mjs --file steps.json   # 自定义步骤截图
 - [x] 解码吞吐 **1228~1337× 实时**；每 10ms 音频块的 p99 ≤0.073ms、max ≤0.29ms（0 块超 10ms）；
 - [x] seek 三级回退：**270/270** 个文件走格式级定位，单次 p50 **6.06ms**、max **23.95ms**；
 - [x] 基准工具随仓库提供：`src-tauri/examples/{decode_bench,scan_bench,seek_bench}.rs`。
-
-## 发布与更新
-
-应用内更新用 Tauri 官方 updater：客户端拉取 `releases/latest/download/latest.json`，
-比对版本后下载签名过的 `.nsis.zip` 并安装（NSIS passive），最后重启到新版本。
-
-```bash
-npm run release                    # = tauri build + 签名 + 生成 latest.json
-# 产物在 src-tauri/target/release/bundle/nsis/
-```
-
-**⚠️ 两条硬要求**
-
-1. **签名私钥**：`bundle.createUpdaterArtifacts = true` 之后，Tauri 强制要求更新签名私钥，
-   直接 `npm run tauri:build` 会因为缺密钥而失败 —— 请用 `npm run release`。
-   私钥默认在 `.build/oberon-updater.key`（已 gitignore）；**丢了就再也无法给老版本发更新**，
-   泄漏则任何人都能签出你的客户端会安装的包。请离线备份、不要提交。
-2. **发 Release 时要传 3 个文件**：`*-setup.exe`（既供手动安装，也是应用内更新的载荷）、
-   `*-setup.exe.sig`（签名）、`latest.json`（清单，endpoint 就指向它）。
-   tag 用 `v<version>`（与脚本生成的下载 URL 一致）。
-   Tauri v2 签的就是 NSIS 安装包本身（没有 v1 时代的 `.nsis.zip`），更新器下载它并带 `/UPDATER` 执行。
-
-换版本号要同时改 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 三处。
 
 ## 路线图
 
