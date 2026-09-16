@@ -83,22 +83,25 @@ if ($LASTEXITCODE -ne 0) {
 $files = @($exe.FullName, $sigPath, $jsonPath)
 
 # --- create the release, or refresh its assets if it already exists ---
+# 手写简介优先（scripts/release-notes.md）：里面会列出支持的格式。
+# 这里做一次兜底 —— 某些调用方式下 $PSScriptRoot 可能取不到，退回按当前目录找。
+$notesFile = Join-Path $PSScriptRoot 'release-notes.md'
+if (-not $notesFile -or -not (Test-Path $notesFile)) {
+  $alt = Join-Path (Get-Location) 'scripts/release-notes.md'
+  if (Test-Path $alt) { $notesFile = $alt }
+}
+$haveNotes = [bool]$notesFile -and (Test-Path $notesFile)
+if ($haveNotes) { Write-Host "[publish] release notes: $notesFile" }
+
 & $gh release view $tag --repo $repo *> $null
 if ($LASTEXITCODE -eq 0) {
   Write-Host "[publish] release $tag exists - uploading assets with --clobber" -ForegroundColor Yellow
   & $gh release upload $tag @files --clobber --repo $repo
   # 同名重发时简介也要一起刷新，否则会出现「包换了、简介还是旧的」
-  $notesRefresh = Join-Path $PSScriptRoot 'release-notes.md'
-  if (Test-Path $notesRefresh) {
-    Write-Host "[publish] refreshing release notes from $notesRefresh"
-    & $gh release edit $tag --repo $repo --notes-file $notesRefresh
-  }
+  if ($haveNotes) { & $gh release edit $tag --repo $repo --notes-file $notesFile }
 } else {
   Write-Host "[publish] creating release $tag" -ForegroundColor Green
-  # 手写简介优先（scripts/release-notes.md）—— 里面会列出支持的格式；没有才用自动生成的提交列表
-  $notesFile = Join-Path $PSScriptRoot 'release-notes.md'
-  if (Test-Path $notesFile) {
-    Write-Host "[publish] using release notes from $notesFile"
+  if ($haveNotes) {
     & $gh release create $tag @files --repo $repo --title "Oberon $version" --verify-tag --latest --notes-file $notesFile
   } else {
     & $gh release create $tag @files --repo $repo --title "Oberon $version" --verify-tag --latest --generate-notes
