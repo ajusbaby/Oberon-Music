@@ -109,16 +109,23 @@ node scripts/ui-shot.mjs --file steps.json   # 自定义步骤截图
 | `.m4a` `.m4b` | MP4 容器内的 AAC 或 ALAC | symphonia |
 | `.opus` | **Ogg Opus** | **opus-pure（纯 Rust，自接）** |
 | `.aac` | **裸 AAC / ADTS 流** | **自写 ADTS 解封装 + symphonia 的 AAC 解码器** |
+| `.dsf` `.dff` | **DSD（DSD64 / 128 / 256 …）** | **自研：Blackman 窗 sinc 低通 + 整数抽取转 PCM** |
 
-后两类 symphonia 不支持（它的 `all-codecs`/`all-formats` 里没有 Opus 也没有 ADTS reader，
+后三类 symphonia 都不支持（它的 `all-codecs`/`all-formats` 里没有 Opus、没有 ADTS reader、也没有 DSD，
 0.5 和 0.6 都一样），所以是自己接的解码器：按**文件内容**嗅探分派，解码结果同样是标准的
 `rodio::Source`，因此时长、进度、gapless 预排、坏文件自动跳过等逻辑对它们一视同仁。
+
+**DSD 走的是「软解成 PCM」这一档**：1-bit 流先经 Blackman 窗 sinc 低通、再整数抽取
+（DSD64 ÷32 → 88.2 kHz），然后交给常规输出路径。这样**任何 DAC 都能放**。
+另外两条路径 —— **DoP**（DSD over PCM）与**原生 DSD 直出** —— 都需要 WASAPI
+**独占 + bit-perfect**：共享模式会把 DoP 帧当普通 PCM 重采样，直接毁掉，所以要等独占输出那个里程碑。
+DSD 的元数据（`.dsf`/`.dff` 用 ID3v2，lofty 不认识）由扫描层的专用支路读取。
 
 **解码器已启用、但扩展名未收录**（丢进音乐目录不会被扫描到）：
 `.mkv` `.mka`（Matroska 容器）、`.mp1` `.mp2` `.mpa`（MPEG 音频 MP1/MP2）、`.aif`。
 加进 `src-tauri/src/db.rs` 的 `SUPPORTED_EXTENSIONS` 即可，无需改解码器。
 
-**暂不支持**：APE、WavPack、DSD（`.dsf`/`.dff`）、TAK、Musepack(MPC)、WMA(ASF)、Speex、RealAudio；
+**暂不支持**：APE、WavPack、TAK、Musepack(MPC)、WMA(ASF)、Speex、RealAudio；
 CUE 整轨分轨（一张图 + .cue 拆成多轨）也不支持。
 
 **输出**：所有音源都会按输出设备的格式做采样率/声道转换（WASAPI **共享模式**），

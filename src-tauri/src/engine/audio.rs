@@ -412,6 +412,7 @@ impl Source for TrackDecoder {
 enum Kind {
     Opus,
     AdtsAac,
+    Dsd,
 }
 
 /// 嗅探文件头，判断是不是 symphonia 处理不了的那两类。
@@ -433,6 +434,10 @@ fn sniff(path: &str) -> Option<Kind> {
     if b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xF6) == 0xF0 {
         return Some(Kind::AdtsAac);
     }
+    // DSD：DSF 以 "DSD " 开头；DFF(DSDIFF) 以 "FRM8" 开头
+    if b.len() >= 4 && (&b[..4] == b"DSD " || &b[..4] == b"FRM8") {
+        return Some(Kind::Dsd);
+    }
     None
 }
 
@@ -444,6 +449,9 @@ pub fn open_decoder(path: &str) -> Result<TrackDecoder, AppError> {
         }
         Some(Kind::AdtsAac) => {
             return Ok(TrackDecoder::Custom(Box::new(crate::engine::adts::AdtsAacSource::open(path)?)))
+        }
+        Some(Kind::Dsd) => {
+            return Ok(TrackDecoder::Custom(Box::new(crate::engine::dsd::DsdSource::open(path)?)))
         }
         None => {}
     }

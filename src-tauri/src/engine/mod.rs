@@ -9,6 +9,7 @@
 pub mod adts;
 pub mod audio;
 pub mod beat;
+pub mod dsd;
 pub mod opus;
 
 use crate::error::{AppError, AppResult};

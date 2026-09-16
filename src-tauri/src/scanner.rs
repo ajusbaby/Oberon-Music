@@ -394,6 +394,18 @@ fn run_scan(
 
 /// 读取标签元数据；内嵌封面直接写入封面缓存目录
 pub fn read_metadata(path: &Path, cover_dir: &Path) -> AppResult<TrackMeta> {
+    // DSD（.dsf/.dff）：lofty 不认识这两种容器，走 dsd-reader 的支路。
+    // ⚠️ 不加这一段的话这两个扩展名虽然能解码，却会在这里 Probe 失败 → 文件被扫描器丢掉，
+    //    变成「能播但收不进库」。
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if ext == "dsf" || ext == "dff" {
+        return read_dsd_metadata(path, &ext, cover_dir);
+    }
+
     let tagged = lofty::probe::Probe::open(path)
         .map_err(|e| AppError::new(crate::error::E_DECODE, format!("Probe 失败: {e}")))?
         .read()
@@ -459,6 +471,51 @@ pub fn read_metadata(path: &Path, cover_dir: &Path) -> AppResult<TrackMeta> {
         return Ok(meta);
     }
 }
+
+/// DSD 的元数据：容器头（dsd-reader 解析）+ 内嵌 ID3（DSF/DFF 用的是 ID3v2，不是 lofty 那套）。
+fn read_dsd_metadata(path: &Path, ext: &str, cover_dir: &Path) -> AppResult<TrackMeta> {
+    let Some(d) = crate::engine::dsd::probe(path.to_string_lossy().as_ref()) else {
+        return Err(AppError::new(
+            crate::error::E_DECODE,
+            format!("无法解析 DSD 文件: {}", path.display()),
+        ));
+    };
+    let mut meta = TrackMeta {
+        title: d.title,
+        artist: d.artist,
+        album: d.album,
+        genre: d.genre,
+        year: d.year,
+        track_no: d.track_no,
+        duration_ms: d.duration_ms,
+        sample_rate: Some(d.sample_rate),
+        channels: Some(d.channels),
+        // DSD 是 1-bit 流，没有传统意义的"码率"；留空比填个误导性的数字好
+        bitrate: None,
+        format: ext.to_string(),
+        ..Default::default()
+    };
+    // 封面：与 lofty 那条路一样走内容寻址缓存
+    if let Some((bytes, ext_hint)) = d.picture {
+        let sniffed = sniff_image_ext(&bytes).unwrap_or(ext_hint);
+        let key = content_key(&bytes, sniffed);
+        if std::fs::create_dir_all(cover_dir).is_ok() {
+            let src = cover_path_for(cover_dir, &key);
+            let unchanged = std::fs::metadata(&src)
+                .map(|m| m.len() == bytes.len() as u64)
+                .unwrap_or(false);
+            if unchanged || std::fs::write(&src, &bytes).is_ok() {
+                let thumb = thumb_path_for(cover_dir, &key);
+                if !unchanged || !thumb.is_file() {
+                    write_cover_thumb(&bytes, &thumb);
+                }
+                meta.cover_key = Some(key);
+            }
+        }
+    }
+    Ok(meta)
+}
+
 /// 封面内容哈希（FNV-1a 64）+ 字节长度：用作持久化缓存文件名。
 /// 为什么不用 std 的 DefaultHasher：它不保证跨 Rust 版本稳定，而这是要长期留在磁盘上的名字。
 /// 带上长度是为了让哈希碰撞也无害（长度不同就不会互相覆盖）。

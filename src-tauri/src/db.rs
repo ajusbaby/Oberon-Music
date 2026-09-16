@@ -12,6 +12,8 @@ use std::path::Path;
 
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
     "mp3", "flac", "wav", "ogg", "oga", "m4a", "m4b", "aac", "opus", "alac", "aiff", "caf",
+    // DSD：symphonia 与 lofty 都不认识 .dsf/.dff —— 解码走 engine::dsd，元数据走 dsd::probe
+    "dsf", "dff",
 ];
 
 /// 打开（或创建）数据库并执行迁移
