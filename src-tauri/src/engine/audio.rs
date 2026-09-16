@@ -30,6 +30,8 @@ pub struct CoreAudio {
     endpoint_id: Option<String>,
     /// 同一个端点的显示名（仅日志用）
     endpoint_name: Option<String>,
+    /// 用户选定的输出设备（设置项 outputDevice）。None = 跟随系统默认设备。
+    preferred: Option<String>,
 }
 
 impl Default for CoreAudio {
@@ -41,6 +43,7 @@ impl Default for CoreAudio {
             device_error: Arc::new(AtomicBool::new(false)),
             endpoint_id: None,
             endpoint_name: None,
+            preferred: None,
         }
     }
 }
@@ -53,7 +56,23 @@ impl CoreAudio {
     /// 设备已经没了 —— 这正是「拔掉耳机后无声但界面仍显示在播放」的根因。
     /// 现在换成自己的错误回调，把「输出流死了」变成引擎能轮询的标志位（见 take_device_error）。
     pub fn ensure(&mut self) -> Result<(), AppError> {
-        self.ensure_with(None)
+        // 用户指定了输出设备就开它（开不了就报错，由引擎进入「等待设备」而不是偷偷换一台）
+        let prefer = self.preferred.clone();
+        self.ensure_with(prefer.as_deref())
+    }
+
+    /// 设置偏好的输出设备（None = 跟随系统默认）。返回是否真的发生了变化。
+    pub fn set_preferred(&mut self, id: Option<String>) -> bool {
+        if self.preferred == id {
+            return false;
+        }
+        self.preferred = id;
+        true
+    }
+
+    /// 当前偏好的输出设备 id（None = 跟随系统默认）
+    pub fn preferred_device_id(&self) -> Option<&str> {
+        self.preferred.as_deref()
     }
 
     /// 打开输出流。`prefer_id` 给出时**必须**开那台设备（找不到就直接失败，绝不悄悄退回默认
@@ -227,6 +246,31 @@ fn find_output_device_by_id(id: &str) -> Option<rodio::cpal::Device> {
 fn device_name(d: &rodio::cpal::Device) -> String {
     use rodio::cpal::traits::DeviceTrait;
     d.description().map(|x| x.name().to_string()).unwrap_or_else(|_| "?".into())
+}
+
+/// 列出全部输出设备（设置页下拉用）。selected 是用户当前选中的 id。
+/// 只列 cpal 能看到的那几台 —— 正是「能真正开流」的那几台，不会把一堆
+/// NOTPRESENT 的历史端点塞进下拉里。
+pub fn list_output_devices(selected: Option<&str>) -> Vec<crate::models::AudioDeviceInfo> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let host = rodio::cpal::default_host();
+    let default_id = host
+        .default_output_device()
+        .and_then(|d| d.id().ok())
+        .map(|x| x.1);
+    let mut out = Vec::new();
+    if let Ok(devices) = host.output_devices() {
+        for d in devices {
+            let Ok(id) = d.id() else { continue };
+            out.push(crate::models::AudioDeviceInfo {
+                is_default: default_id.as_deref() == Some(id.1.as_str()),
+                is_selected: selected == Some(id.1.as_str()),
+                name: device_name(&d),
+                id: id.1,
+            });
+        }
+    }
+    out
 }
 
 /// 按稳定 id 查某个输出端点是否处于 ACTIVE（已插入且可用）状态。

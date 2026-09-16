@@ -39,6 +39,9 @@ pub enum EngineCommand {
     /// 「上一首」行为：true = 播放超过阈值时回到本曲开头（历史行为）；
     /// false = 总是切上一首（设置项 previousRestart 的默认值）
     SetPreviousRestart { enabled: bool },
+    /// 切换输出设备（设置页「输出设备」）。None = 跟随系统默认。
+    /// 立刻迁移：重开设备并尽量回到原来的播放位置。
+    SetOutputDevice { id: Option<String> },
     /// 停止引擎线程（预留：应用退出时显式收尾）
     #[allow(dead_code)]
     Shutdown,
@@ -439,6 +442,11 @@ fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandl
             rebuild_perm(ctx);
             sync_shared(ctx, app, shared);
         }
+        EngineCommand::SetOutputDevice { id } => {
+            if ctx.core.set_preferred(id) {
+                remigrate_output(ctx, app, shared);
+            }
+        }
         EngineCommand::SetPreviousRestart { enabled } => {
             // 全文件唯一一个不调 sync_shared 的非空分支：该偏好不进 PlayerState 快照、
             // 不影响音频输出，sync 只会白发一次内容毫无变化的状态事件
@@ -725,6 +733,33 @@ fn resume_inner(ctx: &mut EngineCtx) {
     }
 }
 
+/// 立刻把播放迁到当前偏好的输出设备上（用户在设置里换了设备时用），尽量保持播放位置。
+fn remigrate_output(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<Mutex<PlayerState>>) {
+    let Some(idx) = ctx.idx else {
+        // 没有在装的曲目：把设备换掉就行，不需要迁移播放
+        ctx.core.reset_device();
+        return;
+    };
+    let was_playing = ctx.status == PlayerStatus::Playing;
+    let at = position_secs(ctx);
+    ctx.core.reset_device();
+    ctx.status = PlayerStatus::Paused;
+    load_and_play(ctx, idx, app);
+    if ctx.status == PlayerStatus::Playing {
+        if at > 1.0 {
+            seek_to(ctx, at, app);
+        }
+        if !was_playing {
+            pause_inner(ctx);
+        }
+    } else {
+        // 新设备当前打不开：进入等待，等它可用时自动接上（位置留着）
+        enter_device_wait(ctx, at);
+        ctx.status = PlayerStatus::Paused;
+    }
+    sync_shared(ctx, app, shared);
+}
+
 /// 设备停滞看门狗 —— **兜底**路径。
 /// 首选信号是 rodio 自己的输出流错误回调（见 audio.rs 的 take_device_error）：
 /// 设备被拔掉时它会明确报错，比这里猜要可靠得多。
@@ -814,16 +849,17 @@ enum RecoverTarget {
 /// - 原设备还没回来且仍在宽限期内 ⇒ 继续等
 /// - 等够了 ⇒ 跟随系统默认设备（用户也可能就是想换到别的设备上放）
 fn choose_recover_target(
-    ours: Option<&str>,
-    ours_active: Option<bool>,
+    wanted: Option<(&str, Option<bool>)>,
     waited_ticks: u64,
+    allow_fallback: bool,
 ) -> RecoverTarget {
-    if ours_active == Some(true) {
-        if let Some(id) = ours {
+    if let Some((id, active)) = wanted {
+        if active == Some(true) {
             return RecoverTarget::Original(id.to_string());
         }
     }
-    if waited_ticks >= DEVICE_WAIT_GRACE_TICKS {
+    // allow_fallback=false 表示用户在设置里指定了设备：等多久都不改用系统默认
+    if allow_fallback && waited_ticks >= DEVICE_WAIT_GRACE_TICKS {
         RecoverTarget::FollowDefault
     } else {
         RecoverTarget::KeepWaiting
@@ -853,12 +889,22 @@ fn try_recover_device(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<
     };
     let at = ctx.resume_at;
 
-    // endpoint_id 在 reset_device() 之后依然保留 —— 它就是「我们原来那台设备」
-    let ours = ctx.core.endpoint_id().map(|s| s.to_string());
-    let ours_state = ours.as_deref().and_then(endpoint_active);
+    // 该恢复到哪台设备：
+    // - 用户在设置里指定了输出设备 ⇒ 就等它，**不回退**到系统默认（那是他的明确选择）
+    // - 没指定 ⇒ 用「我们最后播放的那台」（endpoint_id 在 reset_device 之后依然保留）
+    let preferred = ctx.core.preferred_device_id().map(|s| s.to_string());
+    let (wanted, allow_fallback) = match preferred.as_deref() {
+        Some(p) => (Some(p.to_string()), false),
+        None => (ctx.core.endpoint_id().map(|s| s.to_string()), true),
+    };
+    let wanted_active = wanted.as_deref().and_then(endpoint_active);
 
     // Some(id) = 明确开这台；None = 开系统默认设备
-    let target: Option<String> = match choose_recover_target(ours.as_deref(), ours_state, ctx.wait_ticks) {
+    let target: Option<String> = match choose_recover_target(
+        wanted.as_deref().map(|id| (id, wanted_active)),
+        ctx.wait_ticks,
+        allow_fallback,
+    ) {
         RecoverTarget::Original(id) => Some(id),
         RecoverTarget::FollowDefault => {
             // 跟随系统默认设备之前，仍要确认默认端点真的 ACTIVE，
@@ -883,9 +929,13 @@ fn try_recover_device(ctx: &mut EngineCtx, app: &tauri::AppHandle, shared: &Arc<
             if !ctx.recover_logged {
                 ctx.recover_logged = true;
                 eprintln!(
-                    "[engine] 原输出设备（{}）尚未回来，继续等待；{} 秒后改为跟随系统默认设备",
+                    "[engine] 目标输出设备（{}）尚未就绪，继续等待{}",
                     ctx.core.endpoint_name().unwrap_or("未知设备"),
-                    DEVICE_WAIT_GRACE_TICKS / DEVICE_RETRY_TICKS
+                    if allow_fallback {
+                        format!("；{} 秒后改为跟随系统默认设备", DEVICE_WAIT_GRACE_TICKS / DEVICE_RETRY_TICKS)
+                    } else {
+                        "（已在设置里指定，不会改用系统默认设备）".to_string()
+                    }
                 );
             }
             return;
@@ -1485,28 +1535,38 @@ mod tests {
     /// 一旦退回默认就是「在播放、进度在走、耳机没声」。
     #[test]
     fn recovery_prefers_the_original_endpoint() {
-        // 原设备回到 ACTIVE：无论等了多久，都必须开它
+        // 目标设备回到 ACTIVE：无论等了多久，都必须开它
         assert_eq!(
-            choose_recover_target(Some("hp"), Some(true), 10_000),
+            choose_recover_target(Some(("hp", Some(true))), 10_000, true),
             RecoverTarget::Original("hp".to_string())
         );
         // 还没回来（UNPLUGGED/NOTPRESENT）且仍在宽限期内：继续等
-        assert_eq!(choose_recover_target(Some("hp"), Some(false), 5), RecoverTarget::KeepWaiting);
-        assert_eq!(choose_recover_target(Some("hp"), None, 5), RecoverTarget::KeepWaiting);
+        assert_eq!(
+            choose_recover_target(Some(("hp", Some(false))), 5, true),
+            RecoverTarget::KeepWaiting
+        );
+        assert_eq!(choose_recover_target(Some(("hp", None)), 5, true), RecoverTarget::KeepWaiting);
         // 刚好到宽限期：改为跟随系统默认
         assert_eq!(
-            choose_recover_target(Some("hp"), Some(false), DEVICE_WAIT_GRACE_TICKS),
+            choose_recover_target(Some(("hp", Some(false))), DEVICE_WAIT_GRACE_TICKS, true),
             RecoverTarget::FollowDefault
         );
         assert_eq!(
-            choose_recover_target(Some("hp"), None, DEVICE_WAIT_GRACE_TICKS),
+            choose_recover_target(Some(("hp", None)), DEVICE_WAIT_GRACE_TICKS, true),
             RecoverTarget::FollowDefault
         );
-        // 没有记录到原设备（例如首次打开就失败）：只能跟随默认
+        // 没有记录到目标设备（例如首次打开就失败）：跟随默认
         assert_eq!(
-            choose_recover_target(None, None, DEVICE_WAIT_GRACE_TICKS),
+            choose_recover_target(None, DEVICE_WAIT_GRACE_TICKS, true),
             RecoverTarget::FollowDefault
         );
+        assert_eq!(choose_recover_target(None, 0, true), RecoverTarget::KeepWaiting);
+        // ★ 用户在设置里指定了输出设备（allow_fallback=false）：等多久都不改用系统默认设备
+        assert_eq!(
+            choose_recover_target(Some(("hp", Some(false))), 1_000_000, false),
+            RecoverTarget::KeepWaiting
+        );
+        assert_eq!(choose_recover_target(None, 1_000_000, false), RecoverTarget::KeepWaiting);
     }
 
     /// enter_device_wait 把「等待设备」所需的即时状态一次性摆正。

@@ -71,6 +71,15 @@ impl AppState {
             .unwrap_or(false);
         engine.send(crate::engine::EngineCommand::SetPreviousRestart { enabled: restart_on_previous }).ok();
 
+        // 输出设备偏好（设置项 outputDevice；缺键 / 空串 = 跟随系统默认设备）。
+        // 必须在引擎开始装载之前送到，否则第一首歌会先开到默认设备上。
+        let output_device = db
+            .lock()
+            .ok()
+            .and_then(|g| crate::db::settings_get(&g, "outputDevice").ok().flatten())
+            .filter(|s| !s.is_empty());
+        engine.send(crate::engine::EngineCommand::SetOutputDevice { id: output_device }).ok();
+
         let (tx, rx) = std::sync::mpsc::channel::<WatchMsg>();
         Ok((
             AppState {

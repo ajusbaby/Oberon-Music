@@ -43,6 +43,7 @@ D:\LocalMusicPlayer
 │  ├─ ui-shot.mjs            #   界面截图/驱动（WebView2 CDP）
 │  ├─ ui-smoke.mjs           #   界面端到端冒烟断言
 │  └─ ui-verify.mjs          #   设计稿一致性比对（计算样式 + 类名骨架）
+│  └─ release.ps1            #   带更新签名的打包：出安装包 + .nsis.zip + .sig + latest.json
 └─ 磨砂玻璃风音乐播放器界面.png
 ```
 
@@ -107,7 +108,9 @@ node scripts/ui-shot.mjs --file steps.json   # 自定义步骤截图
 
 - [x] IPC 命令 + 事件（播放状态 / 进度 / 错误 / 扫描 / 曲库变更），进度事件按 ~800ms 节流；
 - [x] 系统托盘：关窗可选「收进托盘继续播放」，托盘菜单可唤出窗口与**真正退出**；
-- [x] **SMTC 系统媒体控制**：键盘媒体键、蓝牙耳机按键、锁屏界面、Windows 11 媒体面板均可控制播放，并显示标题 / 艺术家 / 专辑 / 封面 / 进度条（支持从系统面板拖动进度）。
+- [x] **SMTC 系统媒体控制**：键盘媒体键、蓝牙耳机按键、锁屏界面、Windows 11 媒体面板均可控制播放，并显示标题 / 艺术家 / 专辑 / 封面 / 进度条（支持从系统面板拖动进度）；
+- [x] **输出设备选择**：设置页可选「跟随系统默认设备」或锁定某一台设备（切换时迁移播放、保持进度；锁定的设备不在场时不会改用系统默认）；
+- [x] **应用内更新**：设置页「版本」一行有「检查更新」，检查 → 下载（带进度）→ 安装 → 自动重启（tauri-plugin-updater，NSIS passive 安装）。
 
 **可复现的性能数据**（实测：Ryzen 7 9700X / NVMe SSD / 125% 缩放）
 
@@ -115,6 +118,29 @@ node scripts/ui-shot.mjs --file steps.json   # 自定义步骤截图
 - [x] 解码吞吐 **1228~1337× 实时**；每 10ms 音频块的 p99 ≤0.073ms、max ≤0.29ms（0 块超 10ms）；
 - [x] seek 三级回退：**270/270** 个文件走格式级定位，单次 p50 **6.06ms**、max **23.95ms**；
 - [x] 基准工具随仓库提供：`src-tauri/examples/{decode_bench,scan_bench,seek_bench}.rs`。
+
+## 发布与更新
+
+应用内更新用 Tauri 官方 updater：客户端拉取 `releases/latest/download/latest.json`，
+比对版本后下载签名过的 `.nsis.zip` 并安装（NSIS passive），最后重启到新版本。
+
+```bash
+npm run release                    # = tauri build + 签名 + 生成 latest.json
+# 产物在 src-tauri/target/release/bundle/nsis/
+```
+
+**⚠️ 两条硬要求**
+
+1. **签名私钥**：`bundle.createUpdaterArtifacts = true` 之后，Tauri 强制要求更新签名私钥，
+   直接 `npm run tauri:build` 会因为缺密钥而失败 —— 请用 `npm run release`。
+   私钥默认在 `.build/oberon-updater.key`（已 gitignore）；**丢了就再也无法给老版本发更新**，
+   泄漏则任何人都能签出你的客户端会安装的包。请离线备份、不要提交。
+2. **发 Release 时要传 3 个文件**：`*-setup.exe`（既供手动安装，也是应用内更新的载荷）、
+   `*-setup.exe.sig`（签名）、`latest.json`（清单，endpoint 就指向它）。
+   tag 用 `v<version>`（与脚本生成的下载 URL 一致）。
+   Tauri v2 签的就是 NSIS 安装包本身（没有 v1 时代的 `.nsis.zip`），更新器下载它并带 `/UPDATER` 执行。
+
+换版本号要同时改 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 三处。
 
 ## 路线图
 

@@ -3,8 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   LyricsResult,
-  Album, Artist, FolderInfo, LibraryStats, Paginated, Playlist, PlaylistDetail,
-  PlayerState, PlayMode, QueuePosition, SearchResult, Track, TrackFilter,
+  Album, Artist, AudioDeviceInfo, FolderInfo, LibraryStats, Paginated, Playlist,
+  PlaylistDetail, PlayerState, PlayMode, QueuePosition, SearchResult, Track, TrackFilter,
 } from "./types";
 
 export async function scanAddMusicFolder(path: string): Promise<FolderInfo> {
@@ -21,6 +21,15 @@ export async function scanMusicLibrary(): Promise<void> {
 }
 export async function scanCancel(): Promise<void> {
   return invoke("scan_cancel");
+}
+
+/** 列出可选输出设备（设置页「输出设备」） */
+export async function audioOutputDevices(): Promise<AudioDeviceInfo[]> {
+  return invoke("audio_output_devices");
+}
+/** 选择输出设备；传 null / "" 表示跟随系统默认设备。落库并立刻迁移播放（保持进度）。 */
+export async function audioSetOutputDevice(id: string | null): Promise<void> {
+  return invoke("audio_set_output_device", { id });
 }
 
 export async function libraryStats(): Promise<LibraryStats> {

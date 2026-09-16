@@ -1661,6 +1661,27 @@
     background: var(--color-active);
 }
 
+/* 设置页里的通用下拉（输出设备等）。外观与 .lf-select 一致，但名字不绑定歌词字体 ——
+   免得以后有人以为它是歌词专用的。 */
+.settings-select {
+    flex: 0 0 auto;
+    min-width: 186px;
+    max-width: 268px;
+    height: 30px;
+    padding: 0 8px;
+    border-radius: 9px;
+    border: 1px solid var(--color-border);
+    background: var(--color-surface-secondary);
+    color: var(--color-text-primary);
+    font-family: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+
+.settings-select:hover {
+    background: var(--color-active);
+}
+
 /* 语言槽的样字：用该槽真实的字体栈渲染（见 SettingsView），所以它同时是一份"所见即所得"的检验 */
 .lf-slot-sample {
     flex: 1;

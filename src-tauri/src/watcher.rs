@@ -28,6 +28,36 @@ impl WatcherHandle {
     }
 }
 
+/// 按数据库里登记的根目录同步监听集合：新增的 watch、已移除的 unwatch。
+///
+/// ⚠️ 启动时必须先调一次 —— 这正是旧版的 bug：roots 只在「本次会话添加过目录」时才有内容，
+/// 重启后它一直是空的，**目录监听等于没开**（实测：重启后往音乐目录里新建文件不会触发扫描）。
+/// WatchMsg::RescanRoots 也复用这里。
+fn sync_roots(watcher: &mut notify::RecommendedWatcher, roots: &mut Vec<String>, state: &AppState) {
+    let fresh: Vec<String> = match state
+        .db
+        .lock()
+        .ok()
+        .and_then(|g| crate::db::list_folders(&g).ok())
+    {
+        Some(v) => v.into_iter().map(|f| f.path).collect(),
+        // 读库失败：保持现状。绝不能因为一次读库失败就把所有监听撤掉
+        None => return,
+    };
+    for r in &fresh {
+        if !roots.contains(r) && watcher.watch(std::path::Path::new(r), RecursiveMode::Recursive).is_ok() {
+            roots.push(r.clone());
+        }
+    }
+    for r in roots.clone() {
+        if !fresh.contains(&r) {
+            let _ = watcher.unwatch(std::path::Path::new(&r));
+            roots.retain(|x| x != &r);
+        }
+    }
+    eprintln!("[watcher] 正在监听 {} 个音乐目录：{roots:?}", roots.len());
+}
+
 /// 启动监听线程（setup 阶段调用一次；持有 AppState 的 Arc 用于读取根目录与触发扫描）
 pub fn run(state: Arc<AppState>, app: tauri::AppHandle, rx: std::sync::mpsc::Receiver<WatchMsg>) {
     let event_ts = Arc::new(Mutex::new(None::<Instant>));
@@ -54,6 +84,8 @@ pub fn run(state: Arc<AppState>, app: tauri::AppHandle, rx: std::sync::mpsc::Rec
     .expect("创建文件监听失败");
 
     let mut roots: Vec<String> = Vec::new();
+    // 启动时先把库里已登记的目录都监听上（旧版漏了这一步，重启后监听形同虚设）
+    sync_roots(&mut watcher, &mut roots, &state);
     let mut last_scan: Option<Instant> = None;
 
     loop {
@@ -69,27 +101,7 @@ pub fn run(state: Arc<AppState>, app: tauri::AppHandle, rx: std::sync::mpsc::Rec
                 roots.retain(|r| r != &path);
                 let _ = watcher.unwatch(std::path::Path::new(&path));
             }
-            Ok(WatchMsg::RescanRoots) => {
-                let fresh: Vec<String> = state
-                    .db
-                    .lock()
-                    .ok()
-                    .and_then(|g| crate::db::list_folders(&g).ok())
-                    .map(|v| v.into_iter().map(|f| f.path).collect())
-                    .unwrap_or_default();
-                for r in &fresh {
-                    if !roots.contains(r) {
-                        let _ = watcher.watch(std::path::Path::new(r), RecursiveMode::Recursive);
-                        roots.push(r.clone());
-                    }
-                }
-                for r in roots.clone() {
-                    if !fresh.contains(&r) {
-                        let _ = watcher.unwatch(std::path::Path::new(&r));
-                        roots.retain(|x| x != &r);
-                    }
-                }
-            }
+            Ok(WatchMsg::RescanRoots) => sync_roots(&mut watcher, &mut roots, &state),
             Ok(WatchMsg::Shutdown) => break,
             Err(_) => {}
         }

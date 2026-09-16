@@ -21,6 +21,9 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // 应用内更新：检查/下载/安装走 updater，装完用 process 重启自己
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let (state, watch_rx) = AppState::init(&handle)?;
@@ -135,6 +138,9 @@ pub fn run() {
             commands::player::player_set_previous_restart,
             commands::player::player_cover,
         commands::player::track_lyrics,
+            // 输出设备
+            commands::audio::audio_output_devices,
+            commands::audio::audio_set_output_device,
             // 歌词字体
             commands::fonts::font_save,
             commands::fonts::font_read,

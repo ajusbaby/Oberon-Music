@@ -1,7 +1,10 @@
 // 设置：曲库统计 / 音乐文件夹 / 播放默认值 / 数据与关于
-import { useEffect, useRef, useState } from "react";
-import type { PlayMode } from "../api/types";
-import { fontDelete } from "../api/ipc";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import type { AudioDeviceInfo, PlayMode } from "../api/types";
+import { audioOutputDevices, audioSetOutputDevice, fontDelete } from "../api/ipc";
 import { Icon } from "../components/Icon";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -94,6 +97,83 @@ export function SettingsView() {
 
   const [busy, setBusy] = useState(false);
   const [fontBusy, setFontBusy] = useState(false);
+
+  // 输出设备：空串 = 跟随系统默认设备。指定某台设备后，它在场时只用它；
+  // 它不在场时不会改用系统默认（见引擎 try_recover_device 里的 allow_fallback）。
+  // 版本号从运行时取（更新之后界面要显示新版本，不能写死）
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    void getVersion()
+      .then(setAppVersion)
+      .catch(() => setAppVersion(""));
+  }, []);
+
+  // 应用内更新：检查 → 下载安装（带进度）→ 重启到新版本
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState("");
+  const checkUpdate = useCallback(async () => {
+    if (updateBusy) return;
+    setUpdateBusy(true);
+    setUpdateStatus("正在检查更新…");
+    try {
+      const update = await check();
+      if (!update) {
+        setUpdateStatus("");
+        toast("已是最新版本", "success");
+        return;
+      }
+      setUpdateStatus("发现新版本 " + update.version + "，正在下载…");
+      let total = 0;
+      let got = 0;
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") {
+          total = event.data.contentLength ?? 0;
+        } else if (event.event === "Progress") {
+          got += event.data.chunkLength;
+          if (total > 0) setUpdateStatus("正在下载 " + Math.round((got / total) * 100) + "%");
+        } else if (event.event === "Finished") {
+          setUpdateStatus("下载完成，正在安装…");
+        }
+      });
+      setUpdateStatus("安装完成，正在重启…");
+      await relaunch();
+    } catch (e) {
+      setUpdateStatus("");
+      toast("检查更新失败：" + String(e), "error");
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, [updateBusy]);
+
+  const [devices, setDevices] = useState<AudioDeviceInfo[]>([]);
+  const [outputId, setOutputId] = useState("");
+  const refreshDevices = useCallback(async () => {
+    try {
+      const list = await audioOutputDevices();
+      setDevices(list);
+      setOutputId(list.find((d) => d.isSelected)?.id ?? "");
+    } catch {
+      /* 取不到设备列表就保持空下拉，不影响设置页其它功能 */
+    }
+  }, []);
+  useEffect(() => {
+    void refreshDevices();
+  }, [refreshDevices]);
+  const changeOutput = useCallback(
+    async (id: string) => {
+      const prev = outputId;
+      setOutputId(id); // 乐观更新：失败再回滚，避免下拉弹回
+      try {
+        await audioSetOutputDevice(id || null);
+        await refreshDevices();
+        toast(id ? "已切换到所选输出设备" : "已改为跟随系统默认设备", "success");
+      } catch (e) {
+        setOutputId(prev);
+        toast("切换输出设备失败：" + String(e), "error");
+      }
+    },
+    [outputId, refreshDevices]
+  );
 
   // 歌词字体：按语言分槽（西文 / 中文 / 日文 / 韩文），一个语言一个字体。
   // 上传的字体**不做语言检测** —— 它在每一个槽的候选里都出现，由用户决定给哪个语言用。
@@ -246,6 +326,37 @@ export function SettingsView() {
             >
               <span className="switch-knob" />
             </button>
+          </div>
+        </div>
+        <div className="section-title">输出设备</div>
+        <div className="settings-block">
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">播放输出设备</div>
+              <div className="settings-hint">
+                {outputId
+                  ? "已指定设备：切换时立刻迁移播放并保持进度；该设备不在时不会改用系统默认设备"
+                  : "跟随系统默认设备（推荐）：拔插耳机 / 切换蓝牙后自动跟着系统走"}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto" }}>
+              <select
+                className="settings-select"
+                value={outputId}
+                onChange={(e) => void changeOutput(e.target.value)}
+              >
+                <option value="">跟随系统默认设备</option>
+                {devices.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                    {d.isDefault ? "（系统默认）" : ""}
+                  </option>
+                ))}
+              </select>
+              <button className="pill-btn" onClick={() => void refreshDevices()}>
+                刷新
+              </button>
+            </div>
           </div>
         </div>
         <div className="section-title">音乐文件夹</div>
@@ -678,23 +789,37 @@ export function SettingsView() {
           <div className="settings-row">
             <div className="settings-row-main">
               <div className="settings-label">版本</div>
-              <div className="settings-hint">Oberon 0.2.5 · Tauri 2 + React 18</div>
+              <div className="settings-hint">
+                {updateStatus ||
+                  "Oberon " + (appVersion || "…") + " · Tauri 2 + React 18"}
+              </div>
             </div>
-            <button
-              className="pill-btn"
-              onClick={() =>
-                openDialog({
-                  kind: "confirm",
-                  title: "关于",
-                  message:
-                    "Oberon 0.2.5：Rust 播放内核（rodio/symphonia）+ SQLite 曲库 + React 界面。",
-                  confirmText: "好的",
-                  onConfirm: () => undefined,
-                })
-              }
-            >
-              关于
-            </button>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto" }}>
+              <button
+                className="pill-btn"
+                disabled={updateBusy}
+                onClick={() => void checkUpdate()}
+              >
+                {updateBusy ? "正在更新…" : "检查更新"}
+              </button>
+              <button
+                className="pill-btn"
+                onClick={() =>
+                  openDialog({
+                    kind: "confirm",
+                    title: "关于",
+                    message:
+                      "Oberon " +
+                      (appVersion || "") +
+                      "：Rust 播放内核（rodio/symphonia）+ SQLite 曲库 + React 界面。",
+                    confirmText: "好的",
+                    onConfirm: () => undefined,
+                  })
+                }
+              >
+                关于
+              </button>
+            </div>
           </div>
         </div>
       </div>

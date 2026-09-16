@@ -116,6 +116,17 @@ export interface PlayerErrorEvent {
   trackId: number | null;
 }
 
+/** 可选输出设备（设置页「输出设备」下拉用） */
+export interface AudioDeviceInfo {
+  /** 稳定设备 id（WASAPI 端点 id） */
+  id: string;
+  name: string;
+  /** 是否是系统当前的默认输出设备 */
+  isDefault: boolean;
+  /** 是否是用户当前选中的设备 */
+  isSelected: boolean;
+}
+
 export interface LibraryStats {
   trackCount: number;
   artistCount: number;

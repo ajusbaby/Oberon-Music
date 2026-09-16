@@ -200,6 +200,19 @@ pub struct PlayerErrorPayload {
     pub track_id: Option<i64>,
 }
 
+/// 可选输出设备（设置页「输出设备」下拉用）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioDeviceInfo {
+    /// 稳定设备 id（WASAPI 端点 id）
+    pub id: String,
+    pub name: String,
+    /// 是否是系统当前的默认输出设备
+    pub is_default: bool,
+    /// 是否是用户当前选中的设备
+    pub is_selected: bool,
+}
+
 /// 曲库统计
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
