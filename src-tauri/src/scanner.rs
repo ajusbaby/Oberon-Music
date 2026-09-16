@@ -613,6 +613,44 @@ mod tests {
         m
     }
 
+
+    /// 裸 AAC(.aac) 能不能被 lofty 读出元数据？
+    /// 这决定了它能否入库 —— 「能播但扫不到」和「扫得到但播不了」都是坏的。
+    #[test]
+    fn reads_metadata_for_adts_aac_sample() {
+        let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.build/samples/ct_faac-adts.aac");
+        if !p.exists() {
+            eprintln!("跳过（缺 .aac 样本）");
+            return;
+        }
+        let covers = std::env::temp_dir().join("oberon_cover_probe");
+        match read_metadata(&p, &covers) {
+            Ok(m) => eprintln!(
+                "[test] .aac 元数据：title={:?} duration={}ms rate={:?} ch={:?}",
+                m.title, m.duration_ms, m.sample_rate, m.channels
+            ),
+            Err(e) => panic!("lofty 读不了 .aac（→ 该文件无法入库）: {e}"),
+        }
+    }
+
+    /// Ogg Opus 的元数据（lofty 支持 Opus，这里确认一下）
+    #[test]
+    fn reads_metadata_for_opus_sample() {
+        let p = std::env::temp_dir().join("oberon_opus_test.opus");
+        if !p.exists() {
+            eprintln!("跳过（先把 opus.rs 的往返测试跑一遍生成样本）");
+            return;
+        }
+        let covers = std::env::temp_dir().join("oberon_cover_probe");
+        match read_metadata(&p, &covers) {
+            Ok(m) => eprintln!(
+                "[test] .opus 元数据：title={:?} duration={}ms rate={:?} ch={:?}",
+                m.title, m.duration_ms, m.sample_rate, m.channels
+            ),
+            Err(e) => panic!("lofty 读不了 .opus（→ 该文件无法入库）: {e}"),
+        }
+    }
+
     /// 路径 + mtime + size 三者全同 ⇒ 跳过（增量扫描的核心收益）
     #[test]
     fn unchanged_file_is_skipped() {

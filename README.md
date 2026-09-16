@@ -101,6 +101,7 @@ node scripts/ui-shot.mjs --file steps.json   # 自定义步骤截图
 **播放（Rust + rodio / Symphonia + cpal / WASAPI）**
 
 - [x] 独立引擎线程 + 命令队列：播放 / 暂停 / 停止 / 上一首 / 下一首 / 跳转 / 音量 / 四种播放模式；
+- [x] **格式支持**：MP3 / FLAC / WAV / AIFF / CAF / Ogg-Vorbis / MP4 容器内的 AAC 与 ALAC（走 symphonia）；**Opus 与裸 AAC(ADTS)** 这两类 symphonia 不支持，由自研解码器补上（纯 Rust，不引 C/cmake 依赖）—— 两类现在都能入库、也能播；
 - [x] **无缝连播（gapless）**：曲末前预解码下一首并追加到**同一个**播放队列 ⇒ 曲间无空隙、不重新初始化音频设备；
 - [x] 输出采样率统一：每个音源在追加时按设备采样率做转换，切歌不重开硬件、无系统层 SRC；
 - [x] 跳转走**原地定位**（毫秒级，不重解码排水）；容器不支持时才回退到重解码；

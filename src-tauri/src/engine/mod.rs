@@ -6,8 +6,10 @@
 //! - 状态快照 Arc<Mutex<PlayerState>> 供 player_state 命令读取
 //! - 事件：player-state（状态跳变）/ player-progress（节流）/ player-error
 
+pub mod adts;
 pub mod audio;
 pub mod beat;
+pub mod opus;
 
 use crate::error::{AppError, AppResult};
 use crate::models::*;

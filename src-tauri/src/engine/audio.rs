@@ -6,10 +6,10 @@
 
 use crate::engine::beat::{BeatMeter, BeatTap};
 use crate::error::{AppError, E_AUDIO_DEVICE, E_DECODE};
-use rodio::source::Source;
-use rodio::{Decoder, MixerDeviceSink, Player};
+use rodio::source::{SeekError, Source};
+use rodio::{ChannelCount, Decoder, MixerDeviceSink, Player, SampleRate};
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -357,17 +357,164 @@ pub fn probe_default_output() -> DefaultOutput {
     DefaultOutput::Unknown
 }
 
-/// 类型别名：单曲解码器（文件 + BufReader）
-pub type TrackDecoder = Decoder<BufReader<File>>;
+/// 曲目解码器。
+/// 默认走 rodio/symphonia；symphonia 不支持的格式（Opus、裸 AAC/ADTS）走自定义 Source。
+/// 两者都实现 rodio 的 `Source`，所以引擎其余部分（BeatTap / 时长 / seek / 排水）完全不用改。
+pub enum TrackDecoder {
+    Symphonia(Decoder<BufReader<File>>),
+    Custom(Box<dyn Source<Item = f32> + Send>),
+}
+
+impl Iterator for TrackDecoder {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        match self {
+            TrackDecoder::Symphonia(d) => d.next(),
+            TrackDecoder::Custom(d) => d.next(),
+        }
+    }
+}
+
+impl Source for TrackDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        match self {
+            TrackDecoder::Symphonia(d) => d.current_span_len(),
+            TrackDecoder::Custom(d) => d.current_span_len(),
+        }
+    }
+    fn channels(&self) -> ChannelCount {
+        match self {
+            TrackDecoder::Symphonia(d) => d.channels(),
+            TrackDecoder::Custom(d) => d.channels(),
+        }
+    }
+    fn sample_rate(&self) -> SampleRate {
+        match self {
+            TrackDecoder::Symphonia(d) => d.sample_rate(),
+            TrackDecoder::Custom(d) => d.sample_rate(),
+        }
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        match self {
+            TrackDecoder::Symphonia(d) => d.total_duration(),
+            TrackDecoder::Custom(d) => d.total_duration(),
+        }
+    }
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        match self {
+            TrackDecoder::Symphonia(d) => d.try_seek(pos),
+            TrackDecoder::Custom(d) => d.try_seek(pos),
+        }
+    }
+}
+
+/// 需要自己解码的格式（按文件内容嗅探，不看扩展名）
+enum Kind {
+    Opus,
+    AdtsAac,
+}
+
+/// 嗅探文件头，判断是不是 symphonia 处理不了的那两类。
+/// ⚠️ Ogg 里也可能是 Vorbis / FLAC（symphonia 支持），所以必须确认首包里是 "OpusHead"
+///    才能走 Opus 路径，否则会把能播的 Vorbis 交给错的解码器。
+fn sniff(path: &str) -> Option<Kind> {
+    let mut f = File::open(path).ok()?;
+    let mut head = [0u8; 512];
+    let n = f.read(&mut head).ok()?;
+    let b = &head[..n];
+    if b.len() >= 4 && &b[..4] == b"OggS" {
+        return if b.windows(8).any(|w| w == &b"OpusHead"[..]) {
+            Some(Kind::Opus)
+        } else {
+            None
+        };
+    }
+    // ADTS：syncword 12 位全 1 且 layer == 00
+    if b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xF6) == 0xF0 {
+        return Some(Kind::AdtsAac);
+    }
+    None
+}
 
 /// 打开音频文件并创建解码器
 pub fn open_decoder(path: &str) -> Result<TrackDecoder, AppError> {
+    match sniff(path) {
+        Some(Kind::Opus) => {
+            return Ok(TrackDecoder::Custom(Box::new(crate::engine::opus::OpusSource::open(path)?)))
+        }
+        Some(Kind::AdtsAac) => {
+            return Ok(TrackDecoder::Custom(Box::new(crate::engine::adts::AdtsAacSource::open(path)?)))
+        }
+        None => {}
+    }
     let file = File::open(path).map_err(|e| {
         AppError::new(crate::error::E_FILE_UNAVAILABLE, format!("无法打开音频文件 {path}: {e}"))
     })?;
     let decoder = Decoder::new(BufReader::new(file))
         .map_err(|e| AppError::new(E_DECODE, format!("解码器初始化失败（格式不支持或文件损坏）: {e}")))?;
-    Ok(decoder)
+    Ok(TrackDecoder::Symphonia(decoder))
+}
+
+
+#[cfg(test)]
+mod decoder_tests {
+    use super::*;
+    use std::io::Write;
+
+    /// 造一个极小的合法 WAV（44.1k / 单声道 / 16bit / 0.1 秒 440Hz），
+    /// 用来回归「枚举化之后 symphonia 路径照旧可用」。
+    fn make_wav() -> std::path::PathBuf {
+        let rate = 44_100u32;
+        let n = (rate as f32 * 0.1) as u32;
+        let mut pcm = Vec::with_capacity(n as usize * 2);
+        for i in 0..n {
+            let v = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / rate as f32).sin() * 0.5;
+            pcm.extend_from_slice(&((v * 32767.0) as i16).to_le_bytes());
+        }
+        let mut w = Vec::new();
+        let data_len = pcm.len() as u32;
+        w.extend_from_slice(b"RIFF");
+        w.extend_from_slice(&(36 + data_len).to_le_bytes());
+        w.extend_from_slice(b"WAVEfmt ");
+        w.extend_from_slice(&16u32.to_le_bytes());
+        w.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        w.extend_from_slice(&1u16.to_le_bytes()); // 单声道
+        w.extend_from_slice(&rate.to_le_bytes());
+        w.extend_from_slice(&(rate * 2).to_le_bytes()); // byte rate
+        w.extend_from_slice(&2u16.to_le_bytes()); // block align
+        w.extend_from_slice(&16u16.to_le_bytes()); // bits
+        w.extend_from_slice(b"data");
+        w.extend_from_slice(&data_len.to_le_bytes());
+        w.extend_from_slice(&pcm);
+        let path = std::env::temp_dir().join("oberon_decoder_probe.wav");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(&w).unwrap();
+        path
+    }
+
+    /// 回归：TrackDecoder 从具体类型改成枚举之后，symphonia 那条路必须照旧能开、有时长、有样本
+    #[test]
+    fn symphonia_path_still_works() {
+        let p = make_wav();
+        let mut d = open_decoder(p.to_str().unwrap()).expect("打开 WAV");
+        assert!(matches!(d, TrackDecoder::Symphonia(_)), "WAV 应走 symphonia 路径");
+        assert_eq!(d.sample_rate().get(), 44_100);
+        assert_eq!(d.channels().get(), 1);
+        let dur = d.total_duration().expect("应能给出时长").as_secs_f64();
+        assert!((dur - 0.1).abs() < 0.02, "时长异常: {dur}");
+        assert_eq!(d.by_ref().take(4410).count(), 4410, "应能取到样本");
+    }
+
+    /// 嗅探：Ogg Vorbis 不能被误判成 Opus（两者都以 OggS 开头）
+    #[test]
+    fn sniff_does_not_misroute_vorbis() {
+        let p = std::env::temp_dir().join("oberon_sniff_vorbis.ogg");
+        let mut fake = b"OggS".to_vec();
+        fake.extend_from_slice(&[0u8; 40]);
+        fake.extend_from_slice(b"\x01vorbis");
+        std::fs::write(&p, &fake).unwrap();
+        assert!(sniff(p.to_str().unwrap()).is_none(), "Vorbis 必须交给 symphonia");
+    }
 }
 
 #[cfg(test)]
