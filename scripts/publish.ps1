@@ -87,6 +87,12 @@ $files = @($exe.FullName, $sigPath, $jsonPath)
 if ($LASTEXITCODE -eq 0) {
   Write-Host "[publish] release $tag exists - uploading assets with --clobber" -ForegroundColor Yellow
   & $gh release upload $tag @files --clobber --repo $repo
+  # 同名重发时简介也要一起刷新，否则会出现「包换了、简介还是旧的」
+  $notesRefresh = Join-Path $PSScriptRoot 'release-notes.md'
+  if (Test-Path $notesRefresh) {
+    Write-Host "[publish] refreshing release notes from $notesRefresh"
+    & $gh release edit $tag --repo $repo --notes-file $notesRefresh
+  }
 } else {
   Write-Host "[publish] creating release $tag" -ForegroundColor Green
   # 手写简介优先（scripts/release-notes.md）—— 里面会列出支持的格式；没有才用自动生成的提交列表

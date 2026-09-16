@@ -10,6 +10,8 @@ src-tauri/gen/
 # 本地文档与设计稿：仓库只保留软件本体（这些文件仍留在本地）
 /docs/
 *.md
+# 例外：发布简介要进仓库（npm run publish 会用它作为 Release 简介）
+!scripts/release-notes.md
 !README.md
 demo.html
 ui-lyrics.png
