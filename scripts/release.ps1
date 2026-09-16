@@ -79,7 +79,11 @@ $latest = [ordered]@{
   }
 }
 $jsonPath = Join-Path $nsisDir 'latest.json'
-$latest | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonPath -Encoding UTF8
+# MUST be UTF-8 WITHOUT a BOM. serde_json (what the Tauri updater uses) rejects a leading
+# BOM outright, so a BOM here makes every in-app update fail with a JSON parse error.
+# Reminder: on Windows PowerShell 5.1 "Set-Content -Encoding UTF8" WRITES a BOM - use .NET.
+$jsonText = $latest | ConvertTo-Json -Depth 6
+[System.IO.File]::WriteAllText($jsonPath, $jsonText, (New-Object System.Text.UTF8Encoding $false))
 
 Write-Host ""
 Write-Host "== artifacts ==" -ForegroundColor Green

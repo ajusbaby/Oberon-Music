@@ -11,6 +11,7 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1",
+    "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
     "check:font": "node scripts/font-logic.mjs"
   },
   "dependencies": {
