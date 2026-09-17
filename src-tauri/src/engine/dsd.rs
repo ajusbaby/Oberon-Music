@@ -88,6 +88,37 @@ fn dsf_data_offset(path: &str) -> Option<u64> {
 
 /// 低通抽头数
 const TAPS: usize = 256;
+
+/// 1-bit 查表的分组宽度：8 个输入样本 = 1 个原始字节
+const CHUNK_BITS: usize = 8;
+/// 一次 FIR 窗口要查多少个 chunk（= TAPS / 8）
+const NCHUNK: usize = TAPS / CHUNK_BITS;
+
+/// 1-bit 查表：把「8 个 ±1 输入样本 × 对应抽头」的内积预先算成 256 项的表。
+///
+/// 窗口约定（LUT 与标量两条路径完全一致）：输出点 g 用的是样本 [g-TAPS, g-1]，
+/// chunk c 覆盖样本 g-TAPS+8c .. g-TAPS+8c+7，其中第 t 个样本对应的抽头是
+/// taps[TAPS-1-(8c+t)]（因为 j = g-1-m，m = g-TAPS+8c+t）。
+///
+/// ⚠️ 这个「窗口比标量老一版」的约定不是随意选的：TAPS 是 8 的倍数、且 decim 也是 8 的
+/// 倍数时，窗口正好落在**字节边界**上，于是一个 chunk 就是一个原始字节，查表不需要做位拼接
+/// （见 DsdSource::fill_lut 的注释）。代价是输出整体晚一个输入样本（0.354 µs @ DSD64），
+/// 听不出来。
+fn build_tables(taps: &[f32]) -> Vec<[f32; 256]> {
+    let nchunk = taps.len() / CHUNK_BITS;
+    let mut tables = vec![[0.0f32; 256]; nchunk];
+    for (c, table) in tables.iter_mut().enumerate() {
+        for (b, slot) in table.iter_mut().enumerate() {
+            let mut acc = 0.0f32;
+            for t in 0..CHUNK_BITS {
+                let s = if (b >> t) & 1 == 1 { 1.0f32 } else { -1.0f32 };
+                acc += taps[taps.len() - 1 - (c * CHUNK_BITS + t)] * s;
+            }
+            *slot = acc;
+        }
+    }
+    tables
+}
 /// 目标输出采样率（优先 88.2k，其次 96k）
 const TARGET_RATES: [u32; 2] = [88_200, 96_000];
 
@@ -307,7 +338,18 @@ pub struct DsdSource {
     sample_rate: u32,
     decim: usize,
     taps: Vec<f32>,
-    /// 每声道：上一块留下的尾部（最多 TAPS-1 个输入样本）
+    /// 是否走 1-bit 查表路径。要求 decim 是 8 的倍数（输出点落在字节边界上）；
+    /// 不满足时退回标量路径（真实 DSD 文件的 decim 一定是 32/64/128/256，恒满足）。
+    use_lut: bool,
+    /// 1-bit 查表：tables[chunk][byte]，见 build_tables()
+    tables: Vec<[f32; 256]>,
+    /// 每声道：上一帧留下的尾部**原始字节**（LUT 窗口需要 NCHUNK 字节的历史）
+    carry_bytes: Vec<Vec<u8>>,
+    /// 每声道已消费的**原始字节**数（全局字节下标基准；输出点 q 满足 q % (decim/8) == 0）
+    bytes_in: u64,
+    /// 每声道的工作缓冲：carry_bytes ++ 本帧字节（复用容量，不在热路径分配）
+    work: Vec<Vec<u8>>,
+    /// 每声道：上一块留下的尾部（最多 TAPS-1 个输入样本）—— 标量路径用
     carry: Vec<Vec<f32>>,
     /// 每声道：展开后的连续输入样本（carry ++ 本块新样本）
     expanded: Vec<Vec<f32>>,
@@ -351,6 +393,14 @@ impl DsdSource {
         };
         let cutoff = 0.9 * 0.5; // 相对输出采样率的归一化截止（0.45 → 输出奈奎斯特的 90%）
         let taps = design_lowpass(cutoff / decim as f32);
+        // 1-bit 查表路径的条件：输出点必须落在字节边界上（decim 是 8 的倍数）。
+        // 真实 DSD 的 rate = 2822400×{1,2,4,8}，88200 一定能整除 ⇒ decim ∈ {32,64,128,256}，恒满足。
+        // OBERON_DSD_SCALAR 是给 A/B 基准用的逃生口（生产不设置）。
+        let use_lut = decim % 8 == 0
+            && TAPS % CHUNK_BITS == 0
+            && NCHUNK % 4 == 0 // fill_lut 的 4 路累加要求
+            && std::env::var_os("OBERON_DSD_SCALAR").is_none();
+        let tables = if use_lut { build_tables(&taps) } else { Vec::new() };
         Ok(Self {
             blocks,
             path: path.to_string(),
@@ -360,6 +410,14 @@ impl DsdSource {
             sample_rate: out_rate,
             decim: decim as usize,
             taps,
+            use_lut,
+            tables,
+            // 起始就填满 NCHUNK 个 0：work 恒等于「NCHUNK 字节前缀 ++ 本帧」，
+            // 于是 work 下标与全局字节的换算始终是 i ↔ bytes_in - NCHUNK + i。
+            // 这 NCHUNK 个 0 只可能被 q < NCHUNK 的输出看到，而那种输出本来就被跳过。
+            carry_bytes: vec![vec![0u8; NCHUNK]; channels],
+            bytes_in: 0,
+            work: vec![Vec::new(); channels],
             carry: vec![Vec::new(); channels],
             expanded: vec![Vec::new(); channels],
             n_in: 0,
@@ -372,6 +430,96 @@ impl DsdSource {
 
     /// 取并处理下一块；返回 false = 结束
     fn fill(&mut self) -> bool {
+        if self.use_lut {
+            self.fill_lut()
+        } else {
+            self.fill_scalar()
+        }
+    }
+
+    /// 1-bit 查表路径（真实 DSD 文件走这条）。
+    ///
+    /// 窗口 [g-TAPS, g-1] 在 decim 是 8 的倍数时正好落在**字节边界**上，于是一个 chunk
+    /// 就是一个原始字节，查表不需要任何位拼接：
+    ///   输出 g 对应字节下标 q = g/8，窗口 = 字节 [q-NCHUNK, q-1]，
+    ///   y[g] = Σ_{c=0}^{NCHUNK-1} tables[c][ byte(q-NCHUNK+c) ]。
+    /// 输出每隔 decim 个样本一次 ⇒ 每隔 d = decim/8 个字节一次。
+    fn fill_lut(&mut self) -> bool {
+        let ch_n = self.channels as usize;
+        let nchunk = self.tables.len();
+        let d = (self.decim / CHUNK_BITS) as u64;
+        loop {
+            let Some((read_size, blocks)) = self.blocks.next_frame() else {
+                self.ended = true;
+                return false;
+            };
+            if read_size == 0 || blocks.is_empty() {
+                continue;
+            }
+            if blocks.len() < ch_n {
+                self.ended = true;
+                return false;
+            }
+            let len = blocks[0].len();
+            // work[ch] = carry_bytes[ch] ++ 本帧字节；work 下标 i 对应全局字节 bytes_in-nchunk+i
+            for ch in 0..ch_n {
+                let w = &mut self.work[ch];
+                w.clear();
+                w.extend_from_slice(&self.carry_bytes[ch]);
+                w.extend_from_slice(&blocks[ch]);
+            }
+            let base = self.bytes_in;
+            self.out.clear();
+
+            // 本帧负责的全局字节 q ∈ [base, base+len-1]，且 q % d == 0、q >= nchunk（窗口要有历史）
+            let mut q = base.max(nchunk as u64);
+            if q % d != 0 {
+                q += d - (q % d);
+            }
+            let end = base + len as u64 - 1;
+            while q <= end {
+                // work 中全局字节 q 的下标；窗口是 [j-nchunk, j-1]
+                let j = (q - base) as usize + nchunk;
+                for ch in 0..ch_n {
+                    let win = &self.work[ch][j - nchunk..j];
+                    // 4 路累加：单个累加器的 32 次串行加法会被延迟卡住（~4 cycle/次）
+                    let mut a0 = 0.0f32;
+                    let mut a1 = 0.0f32;
+                    let mut a2 = 0.0f32;
+                    let mut a3 = 0.0f32;
+                    let mut c = 0usize;
+                    while c < nchunk {
+                        a0 += self.tables[c][win[c] as usize];
+                        a1 += self.tables[c + 1][win[c + 1] as usize];
+                        a2 += self.tables[c + 2][win[c + 2] as usize];
+                        a3 += self.tables[c + 3][win[c + 3] as usize];
+                        c += 4;
+                    }
+                    self.out.push((a0 + a1) + (a2 + a3));
+                }
+                q += d;
+            }
+
+            // 更新 carry_bytes（保留最后 nchunk 个字节）与已消费字节数
+            for ch in 0..ch_n {
+                let w = &self.work[ch];
+                let keep = nchunk.min(w.len());
+                let start = w.len() - keep;
+                self.carry_bytes[ch].clear();
+                self.carry_bytes[ch].extend_from_slice(&w[start..]);
+            }
+            self.bytes_in = base + len as u64;
+
+            if !self.out.is_empty() {
+                self.pos = 0;
+                return true;
+            }
+        }
+    }
+
+    /// 标量路径（兜底 / 基准参照）：把字节展开成 ±1 的 f32 再做直接式 FIR。
+    /// ⚠️ 窗口约定必须与 fill_lut 完全一致（[g-TAPS, g-1]），否则两条路径的相位会差 1 个输入样本。
+    fn fill_scalar(&mut self) -> bool {
         if self.ended {
             return false;
         }
@@ -409,9 +557,9 @@ impl DsdSource {
             self.out.clear();
             for local in 0..n {
                 let global = base + local as u64;
-                // 相位对齐用全局下标（保证跨块一致）；但**窗口是否够长必须看块内下标** ——
-                // 有 carry 时 global 很大而 local 可能还很小，用 global 判断会下标下溢
-                if global % self.decim as u64 != 0 || local + 1 < TAPS {
+                // 相位对齐用全局下标；窗口长度看块内下标（有 carry 时 global 很大而 local 可能还很小）。
+                // 窗口是 [g-TAPS, g-1] ⇒ 需要 local-1-j >= 0（j 最大 TAPS-1）⇒ local >= TAPS
+                if global % self.decim as u64 != 0 || local < TAPS {
                     continue;
                 }
                 for ch in 0..ch_n {
@@ -419,14 +567,14 @@ impl DsdSource {
                     let mut acc = 0.0f32;
                     // 直接式 FIR：非零抽头都参与
                     for (j, &t) in self.taps.iter().enumerate() {
-                        acc += src[local - j] * t;
+                        acc += src[local - 1 - j] * t;
                     }
                     self.out.push(acc);
                 }
             }
 
-            // 更新 carry（保留最后 TAPS-1 个样本）与已消费计数
-            let keep = (TAPS - 1).min(n);
+            // 更新 carry（保留最后 TAPS 个样本，与 fill_lut 的 nchunk 字节历史对齐）与已消费计数
+            let keep = TAPS.min(n);
             for ch in 0..ch_n {
                 let src = &self.expanded[ch];
                 let start = src.len() - keep;
@@ -442,12 +590,19 @@ impl DsdSource {
         }
     }
 
-    /// 定位之后把滤波状态整体重来：256 个输入样本只有 0.09ms，听不出来
+    /// 定位之后把滤波状态整体重来：窗口只有 256 个输入样本（0.09ms），听不出来
     fn reset_after_seek(&mut self) {
         for c in self.carry.iter_mut() {
             c.clear();
         }
         self.n_in = 0;
+        // LUT 路径的字节级历史也要一起清（否则会拿定位前的字节当窗口）。
+        // 必须补回 NCHUNK 个 0（而不是清空）：fill_lut 假设 work 恒有 NCHUNK 字节前缀。
+        for c in self.carry_bytes.iter_mut() {
+            c.clear();
+            c.resize(NCHUNK, 0);
+        }
+        self.bytes_in = 0;
         self.out.clear();
         self.pos = 0;
         self.ended = false;
@@ -745,6 +900,27 @@ mod tests {
         eprintln!("[test] DSF O(1) 定位与顺序跳过一致（{} 个样本）", sa.len());
     }
 
+    /// 1-bit 查表路径与标量路径必须解出**同一条 PCM**（只有浮点求和顺序不同，留一点容差）。
+    /// 这是这次优化的安全网：查表的位序 / 相位 / ±1 映射只要错一格，这里立刻炸。
+    #[test]
+    fn lut_matches_scalar_reference() {
+        let p = make_dsf_at("oberon_dsd_lut_equiv.dsf", 1000.0, 0.5, 2);
+        let mut lut = DsdSource::open(p.to_str().unwrap()).unwrap();
+        assert!(lut.use_lut, "decim 是 8 的倍数时应走查表路径");
+        lut.use_lut = true;
+        let a: Vec<f32> = lut.by_ref().collect();
+        let mut sc = DsdSource::open(p.to_str().unwrap()).unwrap();
+        sc.use_lut = false;
+        let b: Vec<f32> = sc.by_ref().collect();
+        assert_eq!(a.len(), b.len(), "两条路径的输出样本数必须一致（否则输出网格/相位错了）");
+        let mut max_diff = 0.0f32;
+        for (x, y) in a.iter().zip(b.iter()) {
+            max_diff = max_diff.max((x - y).abs());
+        }
+        let rms = (a.iter().map(|v| v * v).sum::<f32>() / a.len() as f32).sqrt();
+        eprintln!("[test] LUT vs 标量：{} 样本，RMS {rms:.3}，最大差 {max_diff:.3e}", a.len());
+        assert!(max_diff < 1e-4, "LUT 与标量解出的 PCM 不一致，最大差 {max_diff}（查表错位？）");
+    }
     /// 真文件诊断（默认 --ignored）：跳到 85% 处的**定位延迟**与**音频线程停顿**。
     ///
     /// 修复前（顺序跳过 166MB，且由音频线程执行）：定位 1192ms、音频线程停顿 1250ms
@@ -781,6 +957,18 @@ mod tests {
         let got = src.by_ref().take(88_200 * 2).count();
         assert_eq!(got, 88_200 * 2, "定位之后应能继续解码");
 
+        // 1b) 真文件上 LUT 与标量必须解出同一条 PCM（合成文件之外再钉一遍）
+        let sample_n = 2_000_000usize;
+        let mut a = DsdSource::open(&path).unwrap();
+        a.use_lut = true;
+        let va: Vec<f32> = a.by_ref().take(sample_n).collect();
+        let mut b = DsdSource::open(&path).unwrap();
+        b.use_lut = false;
+        let vb: Vec<f32> = b.by_ref().take(sample_n).collect();
+        assert_eq!(va.len(), vb.len(), "真文件上两条路径样本数不一致");
+        let md = va.iter().zip(vb.iter()).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+        eprintln!("[test] 真文件 LUT vs 标量：{} 样本，最大差 {md:.3e}", va.len());
+        assert!(md < 1e-4, "真文件上 LUT 与标量不一致：{md}");
         // 2) 音频线程停顿：让 Player::try_seek 在拉取线程上执行（rodio 的真实行为）
         let (mixer, mut out) = rodio::mixer::mixer(
             NonZero::new(2).unwrap(),
