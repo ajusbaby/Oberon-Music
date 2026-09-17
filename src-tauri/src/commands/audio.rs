@@ -58,8 +58,8 @@ pub async fn audio_output_mode(state: State<'_, Arc<AppState>>) -> AppResult<Str
 }
 
 /// 设置输出模式。白名单校验，避免脏值写库。
-/// 注意：独占后端（渲染线程）还没接上，这里先只落库；接上之后要在这里同时
-/// 重开输出设备并按其结果回退（见 engine/backend.rs 的 Fallback）。
+/// 落库之后立刻通知引擎重开输出：模式只影响「允不允许尝试独占」，
+/// 真正走成哪条路由运行时协商决定，回退原因随后可从 audio_output_status 读到。
 #[tauri::command]
 pub async fn audio_set_output_mode(state: State<'_, Arc<AppState>>, mode: String) -> AppResult<()> {
     let mode = if matches!(mode.as_str(), "auto" | "exclusive" | "shared") {
@@ -67,7 +67,28 @@ pub async fn audio_set_output_mode(state: State<'_, Arc<AppState>>, mode: String
     } else {
         "auto".to_string()
     };
+    // 先解析成枚举（Copy）：mode 这个 String 接下来要被移进阻塞任务写库
+    let parsed = crate::engine::backend::OutputMode::parse(&mode);
     let db = state.db.clone();
     db_run(db, move |c| Ok(crate::db::settings_set(c, KEY_OUTPUT_MODE, &mode)?)).await?;
+    state.engine.send(EngineCommand::SetOutputMode { mode: parsed })?;
     Ok(())
+}
+
+/// 让引擎重新协商一次输出后端（重开输出并尽量回到原位置）。
+/// 用途：用户在 Windows 里改完独占设置之后，不用重启 app 也能重新尝试独占，
+/// 并让设置页里那条「回退原因」重新算一遍。
+#[tauri::command]
+pub async fn audio_retry_output(state: State<'_, Arc<AppState>>) -> AppResult<()> {
+    state.engine.send(EngineCommand::RetryOutput)?;
+    Ok(())
+}
+
+/// 当前输出后端状态：谁在出声（共享 / 独占）、独占时的实际格式、以及回退原因。
+/// 由引擎线程在每次打开输出时写入（见 engine/audio.rs 的 OutputStatus）。
+#[tauri::command]
+pub async fn audio_output_status(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<crate::engine::audio::OutputStatus> {
+    Ok(state.engine.output_status())
 }

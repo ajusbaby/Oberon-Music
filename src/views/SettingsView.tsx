@@ -3,11 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import type { AudioDeviceInfo, ExclusiveDeviceCaps, PlayMode } from "../api/types";
+import type { AudioDeviceInfo, ExclusiveDeviceCaps, OutputStatus, PlayMode } from "../api/types";
 import {
   audioExclusiveProbe,
   audioOutputDevices,
   audioOutputMode,
+  audioOutputStatus,
+  audioRetryOutput,
   audioSetOutputDevice,
   audioSetOutputMode,
   fontDelete,
@@ -166,6 +168,41 @@ export function SettingsView() {
   useEffect(() => {
     void refreshDevices();
   }, [refreshDevices]);
+  // 当前**实际生效**的输出后端：由引擎线程在每次打开输出时写入。
+  // 走独占还是回退共享只有引擎知道，所以这里不做本地推断，只显示事实。
+  const [outStatus, setOutStatus] = useState<OutputStatus | null>(null);
+  const refreshOutStatus = useCallback(async () => {
+    try {
+      setOutStatus(await audioOutputStatus());
+    } catch {
+      /* 读不到就保持上一次的值（引擎尚未打开输出时 backend 默认就是 shared） */
+    }
+  }, []);
+  useEffect(() => {
+    void refreshOutStatus();
+    // 输出是在播放时由引擎线程打开/回退的，轮询是唯一能反映它的方式；1.5s 足够且开销可忽略
+    const timer = window.setInterval(() => void refreshOutStatus(), 1500);
+    return () => window.clearInterval(timer);
+  }, [refreshOutStatus]);
+  // 重新协商：用户改完系统独占设置后不想重启 app 时的入口。
+  // 引擎重开输出是异步的，所以等一小会儿再读状态，避免立刻读到旧结论。
+  const [retryBusy, setRetryBusy] = useState(false);
+  const retryOutput = useCallback(async () => {
+    if (retryBusy) return;
+    setRetryBusy(true);
+    try {
+      await audioRetryOutput();
+      await new Promise((resolve) => window.setTimeout(resolve, 400));
+      await refreshOutStatus();
+      toast("已重新协商输出后端", "success");
+    } catch (e) {
+      toast("重新协商失败：" + String(e), "error");
+    } finally {
+      setRetryBusy(false);
+    }
+  }, [retryBusy, refreshOutStatus]);
+  // 输出后端状态要在 changeOutput 之前声明：它的依赖数组是渲染期求值的，
+  // 写在后面会踩 TDZ（ReferenceError: Cannot access before initialization）。
   const changeOutput = useCallback(
     async (id: string) => {
       const prev = outputId;
@@ -173,13 +210,15 @@ export function SettingsView() {
       try {
         await audioSetOutputDevice(id || null);
         await refreshDevices();
+        // 换设备会触发引擎重开输出：独占能力是**每台设备各自**的，立刻读一次结果
+        await refreshOutStatus();
         toast(id ? "已切换到所选输出设备" : "已改为跟随系统默认设备", "success");
       } catch (e) {
         setOutputId(prev);
         toast("切换输出设备失败：" + String(e), "error");
       }
     },
-    [outputId, refreshDevices]
+    [outputId, refreshDevices, refreshOutStatus]
   );
 
   // 独占输出：模式选择 + **现场探测**（不假设用户设备支持什么，问一遍驱动再说）
@@ -201,6 +240,8 @@ export function SettingsView() {
       setOutMode(mode);
       try {
         await audioSetOutputMode(mode);
+        // 切模式会触发引擎重开输出，立刻读一次真实结果（是否真的走成了独占）
+        await refreshOutStatus();
         toast(
           mode === "exclusive"
             ? "已改为独占模式（设备不支持时自动回退共享）"
@@ -214,7 +255,7 @@ export function SettingsView() {
         toast("切换输出模式失败：" + String(e), "error");
       }
     },
-    [outMode]
+    [outMode, refreshOutStatus]
   );
   const probeCaps = useCallback(async () => {
     setProbeBusy(true);
@@ -429,6 +470,24 @@ export function SettingsView() {
               <option value="exclusive">独占（bit-perfect）</option>
               <option value="shared">共享（系统混音器）</option>
             </select>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">当前生效的后端</div>
+              <div className="settings-hint">
+                {!outStatus || !outStatus.opened
+                  ? "尚未打开输出（播放一首之后显示）"
+                  : outStatus.backend === "exclusive"
+                    ? "独占模式" + (outStatus.format ? "：" + outStatus.format : "")
+                    : "共享模式（系统混音器）"}
+              </div>
+              {outStatus?.fallback ? (
+                <div className="settings-hint warn">回退原因：{outStatus.fallback}</div>
+              ) : null}
+            </div>
+            <button className="pill-btn" disabled={retryBusy} onClick={() => void retryOutput()}>
+              {retryBusy ? "重试中…" : "重新尝试独占"}
+            </button>
           </div>
           <div className="settings-row">
             <div className="settings-row-main">

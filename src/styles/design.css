@@ -17,6 +17,8 @@
             --color-hover: rgba(0, 0, 0, 0.04);
             --color-active: rgba(0, 0, 0, 0.07);
             --color-sidebar: #FAFAFC;
+            /* 警告色（如独占回退原因）：Amber，白底上对比度足够 */
+            --color-warn: #B26A00;
             --radius-sm: 8px;
             --radius-md: 12px;
             --radius-lg: 16px;

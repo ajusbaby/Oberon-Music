@@ -1,23 +1,72 @@
 //! 音频解码与底层播放辅助（rodio 0.22：symphonia 解码 + cpal 输出）
 //!
 //! - 解码：rodio 内置 symphonia 后端（mp3/flac/wav/ogg/m4a(aac/alac)/aiff/caf 等）
-//! - 输出：DeviceSinkBuilder 默认设备（WASAPI 共享）；独占模式输出留待后续里程碑
+//! - 输出：两种后端 —— 共享（DeviceSinkBuilder/cpal）与 **WASAPI 独占**（engine/exclusive.rs）。
+//!   走哪条由 OutputMode（设置项 outputMode）决定：Auto/Exclusive 先协商独占，
+//!   协商不到就回退共享并把原因交给 UI（见 engine/backend.rs 的 Fallback）。
 //! - 跳转：按设计文档 §4.3 “通过重解码实现”——重新打开文件并跳过样本到目标位置
 
+use crate::engine::backend::{self, Fallback, OutputMode};
 use crate::engine::beat::{BeatMeter, BeatTap};
+use crate::engine::exclusive::ExclusiveSink;
 use crate::error::{AppError, E_AUDIO_DEVICE, E_DECODE};
+use rodio::mixer::Mixer;
 use rodio::source::{SeekError, Source};
 use rodio::{ChannelCount, Decoder, MixerDeviceSink, Player, SampleRate};
+use serde::Serialize;
 use std::fs::File;
 use std::io::{BufReader, Read};
+use std::num::NonZero;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// 实际生效的输出后端（设置页显示用）
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    Shared,
+    Exclusive,
+}
+
+impl Default for Backend {
+    fn default() -> Self {
+        Backend::Shared
+    }
+}
+
+/// 输出状态快照（audio_output_status 命令返回给设置页）。
+///
+/// 为什么需要它：后端选谁、用什么格式、为什么回退，全部发生在**引擎线程**里，
+/// 命令层拿不到 CoreAudio。所以引擎把结论写进这个共享槽，命令层只读。
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputStatus {
+    /// 引擎是否已经真正打开过一次输出。
+    /// 用来区分「当前就是共享」与「还没播过、后端未定」—— 后者显示共享会误导用户。
+    pub opened: bool,
+    pub backend: Backend,
+    /// 独占时实际生效的「采样率/有效位/容器位」，如 "44100/24/32"；共享时为 None
+    pub format: Option<String>,
+    /// 回退共享的原因（中文，来自 Fallback::hint）；非回退时为 None
+    pub fallback: Option<String>,
+}
 
 /// 输出设备 + 播放句柄的持有者（Player/Drop 语义：句柄释放即停止）
 pub struct CoreAudio {
-    /// 设备句柄必须存活于整个播放过程
+    /// 共享模式的设备句柄必须存活于整个播放过程（独占模式为 None）
     sink: Option<MixerDeviceSink>,
+    /// 独占输出的渲染线程句柄（None = 当前没走独占）
+    exclusive: Option<ExclusiveSink>,
+    /// 独占路径下**自建**的 mixer：Player 接到它，渲染线程从它的 MixerSource 拉样本。
+    /// 与 ExclusiveSink 内部持有的 MixerSource 共享同一个 channel。
+    exclusive_mixer: Option<Mixer>,
+    /// 建立上面这条独占链路时用的**曲目采样率**。
+    /// 用来判断「换曲之后要不要重开设备」：采样率不同就得重开（P0 不做逐曲切率的无缝）。
+    exclusive_track_rate: Option<u32>,
+    /// 这台设备这次已经试过独占且失败了 —— 在 reset_device / 换模式 / 换设备之前不再重试。
+    /// 不这样记的话，每首歌都要先失败一次再回退，白白多花几十毫秒、还可能产生爆音。
+    exclusive_denied: bool,
     /// 当前单曲的播放控制句柄
     pub player: Option<Player>,
     /// 当前生效音量 0.0..=1.0
@@ -32,33 +81,76 @@ pub struct CoreAudio {
     endpoint_name: Option<String>,
     /// 用户选定的输出设备（设置项 outputDevice）。None = 跟随系统默认设备。
     preferred: Option<String>,
+    /// 输出模式（设置项 outputMode）
+    mode: OutputMode,
+    /// 回退共享的中文原因（给设置页显示）
+    last_fallback: Option<String>,
+    /// 本次要播的曲目采样率。恢复流程（try_recover_device 先 ensure_with 再 load_and_play）
+    /// 也要用它协商独占，否则会按设备默认率开一次、紧接着又因采样率不同重开。
+    current_track_rate: Option<u32>,
+    /// 共享给命令层的输出状态（engine 线程写、命令层读）
+    status: Arc<Mutex<OutputStatus>>,
 }
 
 impl Default for CoreAudio {
     fn default() -> Self {
+        Self::new(Arc::new(Mutex::new(OutputStatus::default())))
+    }
+}
+
+impl CoreAudio {
+    /// 用外部的状态槽构造（引擎线程用这个，命令层才能读到输出状态）
+    pub fn new(status: Arc<Mutex<OutputStatus>>) -> Self {
         Self {
             sink: None,
+            exclusive: None,
+            exclusive_mixer: None,
+            exclusive_track_rate: None,
+            exclusive_denied: false,
             player: None,
             volume: 1.0,
             device_error: Arc::new(AtomicBool::new(false)),
             endpoint_id: None,
             endpoint_name: None,
             preferred: None,
+            mode: OutputMode::Auto,
+            last_fallback: None,
+            current_track_rate: None,
+            status,
         }
     }
 }
 
 impl CoreAudio {
-    /// 惰性初始化音频输出（WASAPI 共享模式；失败返回 AUDIO_DEVICE 错误）
-    ///
-    /// ⚠️ 这里刻意**不用** rodio 的 open_default_sink()：它装的是默认错误回调，设备被拔掉时
-    /// 只往 stderr 打一行「audio stream error: ... unplugged」就完了，引擎侧完全感知不到
-    /// 设备已经没了 —— 这正是「拔掉耳机后无声但界面仍显示在播放」的根因。
-    /// 现在换成自己的错误回调，把「输出流死了」变成引擎能轮询的标志位（见 take_device_error）。
-    pub fn ensure(&mut self) -> Result<(), AppError> {
-        // 用户指定了输出设备就开它（开不了就报错，由引擎进入「等待设备」而不是偷偷换一台）
-        let prefer = self.preferred.clone();
-        self.ensure_with(prefer.as_deref())
+    /// 设置输出模式（设置项 outputMode）。返回是否真的变了。
+    /// ⚠️ 模式改了要重开输出（调用方 remigrate），因为当前后端已经被固定下来了。
+    pub fn set_mode(&mut self, mode: OutputMode) -> bool {
+        if self.mode == mode {
+            return false;
+        }
+        self.mode = mode;
+        // 换了模式就该重新给独占一次机会（用户改回 Exclusive 时尤其如此）
+        self.exclusive_denied = false;
+        true
+    }
+
+    /// 丢掉「上次回退共享」的结论，并把状态打回「尚未打开」。
+    /// 用户点「重新尝试独占」时调用；下一次打开输出会写真实结果。
+    pub fn forget_fallback(&mut self) {
+        self.last_fallback = None;
+        self.exclusive_denied = false;
+        if let Ok(mut g) = self.status.lock() {
+            g.opened = false;
+            g.format = None;
+            g.fallback = None;
+        }
+    }
+
+    /// 输出状态快照（设置页显示当前后端 / 格式 / 回退原因）。
+    /// 命令层走 EngineHandle::output_status（同一个槽）；这里留给测试与引擎内部排查用。
+    #[allow(dead_code)]
+    pub fn output_status(&self) -> OutputStatus {
+        self.status.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// 设置偏好的输出设备（None = 跟随系统默认）。返回是否真的发生了变化。
@@ -67,6 +159,8 @@ impl CoreAudio {
             return false;
         }
         self.preferred = id;
+        // 换了设备：独占要重新协商
+        self.exclusive_denied = false;
         true
     }
 
@@ -75,13 +169,53 @@ impl CoreAudio {
         self.preferred.as_deref()
     }
 
-    /// 打开输出流。`prefer_id` 给出时**必须**开那台设备（找不到就直接失败，绝不悄悄退回默认
+    /// 确保输出已打开。`prefer_id` 给出时**必须**开那台设备（找不到就直接失败，绝不悄悄退回默认
     /// 设备）—— 这正是「拔掉耳机后声音跑到显示器 HDMI 音频上」那个 bug 的关键：
     /// 恢复时若放它去开「系统默认」，系统早就把默认切到那类常驻 ACTIVE 的端点上了。
+    ///
+    /// ⚠️ 这里刻意**不用** rodio 的 open_default_sink()：它装的是默认错误回调，设备被拔掉时
+    /// 只往 stderr 打一行就完了，引擎侧完全感知不到设备已经没了。
+    /// 共享路径用我们自己的错误回调，把「输出流死了」变成引擎能轮询的标志位。
+    ///
+    /// 独占模式由 open_output 决策；采样率取 current_track_rate（恢复流程与 new_player 保持一致）。
     pub fn ensure_with(&mut self, prefer_id: Option<&str>) -> Result<(), AppError> {
+        let rate = self.current_track_rate;
+        self.open_output(prefer_id, rate)
+    }
+
+    /// 打开输出的唯一入口：共享 / 独占的决策、协商、回退都在这里。
+    fn open_output(&mut self, prefer_id: Option<&str>, track_rate: Option<u32>) -> Result<(), AppError> {
+        // 共享输出已经开着：直接复用（对应历史行为：设备只开一次）
         if self.sink.is_some() {
             return Ok(());
         }
+        if self.mode.allows_exclusive() && !self.exclusive_denied {
+            // 独占链路还活着、且这次曲目的采样率与建立它时相同 ⇒ 复用它。
+            // 同采样率的连续曲目复用，曲间就没有重开设备的停顿（gapless 的关键）。
+            let reusable = self
+                .exclusive
+                .as_ref()
+                .map(|s| s.is_alive() && self.exclusive_track_rate == track_rate)
+                .unwrap_or(false);
+            if reusable {
+                return Ok(());
+            }
+            self.drop_exclusive();
+            match self.try_open_exclusive(prefer_id, track_rate) {
+                Ok(()) => return Ok(()),
+                Err((fb, msg)) => {
+                    // 记下原因并**回退共享**：独占失败不能让用户没声音
+                    self.exclusive_denied = true;
+                    self.last_fallback = Some(fb.hint().to_string());
+                    eprintln!("[engine] 独占输出不可用（{fb:?}）：{msg}；回退共享模式");
+                }
+            }
+        }
+        self.open_shared(prefer_id)
+    }
+
+    /// 共享模式（cpal/WASAPI shared）—— 与历史版本逐位一致的路径
+    fn open_shared(&mut self, prefer_id: Option<&str>) -> Result<(), AppError> {
         let flag = self.device_error.clone();
         let (builder, id, name) = match prefer_id {
             Some(want) => {
@@ -119,10 +253,122 @@ impl CoreAudio {
                 self.sink = Some(sink);
                 self.endpoint_id = id;
                 self.endpoint_name = Some(name.clone());
-                eprintln!("[engine] 已打开输出设备：{name}");
+                self.publish(Backend::Shared, None);
+                eprintln!("[engine] 已打开输出设备（共享模式）：{name}");
                 Ok(())
             }
             Err(e) => Err(AppError::new(E_AUDIO_DEVICE, format!("无法打开音频输出设备（WASAPI）：{e}"))),
+        }
+    }
+
+    /// 协商并打开 WASAPI 独占输出。
+    ///
+    /// 候选顺序：曲目采样率 → 设备共享默认率 → 48000 → 44100；
+    /// 每个采样率下再按 FMT_PREF 偏好（24/32 → 24/24 → 32/32 → 32f → 16/16）逐个试。
+    /// 采样率必须先定下来再去建 mixer —— mixer 的率与设备率不一致就是**变速播放**
+    /// （见 3.2.8 与 current_span_len 那个 bug）。
+    fn try_open_exclusive(
+        &mut self,
+        prefer_id: Option<&str>,
+        track_rate: Option<u32>,
+    ) -> Result<(), (Fallback, String)> {
+        // 设备：与共享路径同一套 id 语义（cpal 的 id 在 Windows 上就是 WASAPI 端点 id）
+        let (device_id, name) = match prefer_id {
+            Some(want) => {
+                let Some(dev) = find_output_device_by_id(want) else {
+                    return Err((
+                        Fallback::DeviceInvalidated,
+                        format!("指定的输出设备当前不可用（id={want}）"),
+                    ));
+                };
+                (Some(want.to_string()), device_name(&dev))
+            }
+            None => match default_output_info() {
+                Some((i, n)) => (Some(i), n),
+                None => (None, "(默认设备)".to_string()),
+            },
+        };
+        // 声道数跟随设备共享默认格式：独占不做声道转换（这是 bit-perfect 的前提）
+        let channels = shared_default_channels(device_id.as_deref()).unwrap_or(2).max(1) as usize;
+        let rates = exclusive_rate_candidates(
+            track_rate,
+            shared_default_rate(device_id.as_deref()),
+        );
+
+        let mut errors: Vec<(Fallback, String)> = Vec::new();
+        for rate in rates {
+            // 便宜预检：驱动声明逐位支持的格式（按偏好序）。每次都是新的 IAudioClient。
+            let mut fmts = backend::supported_formats(device_id.as_deref(), rate as usize, channels);
+            if fmts.is_empty() {
+                // 一个都不声明时仍试一次首选格式：is_supported 有假阴性，
+                // 而 Initialize 才是真正的判据（探针阶段就遇到过这种设备）
+                fmts.push(backend::FMT_PREF[0]);
+            }
+            for fmt in fmts {
+                let (mixer, source) = rodio::mixer::mixer(nz_channels(channels), nz_rate(rate));
+                match ExclusiveSink::start_at(device_id.clone(), source, rate, fmt, channels) {
+                    Ok(sink) => {
+                        let label = sink.format_label().to_string();
+                        // 用 sink 自己报的 rate/channels 打日志：与真正开出来的设备状态一致
+                        let got_rate = sink.sample_rate();
+                        let got_ch = sink.channels();
+                        eprintln!(
+                            "[engine] 已打开独占输出：{got_rate}Hz {} {got_ch}ch（设备 {name}）",
+                            fmt.label()
+                        );
+                        self.endpoint_id = device_id;
+                        self.endpoint_name = Some(name);
+                        self.exclusive = Some(sink);
+                        self.exclusive_mixer = Some(mixer);
+                        self.exclusive_track_rate = track_rate;
+                        self.last_fallback = None;
+                        self.publish(Backend::Exclusive, Some(label));
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        // 设备级错误（被占用 / 系统禁用独占 / 设备已失效）换采样率或位深都没用，
+                        // 直接把这些候选试完只会白白多等几百毫秒（每次都是一次 Initialize）。
+                        if matches!(
+                            e.0,
+                            Fallback::DeviceInUse
+                                | Fallback::ExclusiveDisabled
+                                | Fallback::DeviceInvalidated
+                        ) {
+                            return Err(e);
+                        }
+                        errors.push(e);
+                    }
+                }
+            }
+        }
+        Err(backend::pick_fallback(&errors)
+            .unwrap_or((Fallback::Other, "没有可用的独占格式".to_string())))
+    }
+
+    /// 停掉独占渲染线程并释放设备（会阻塞到线程真正退出，见 ExclusiveSink::stop）
+    fn drop_exclusive(&mut self) {
+        if let Some(mut s) = self.exclusive.take() {
+            s.stop();
+        }
+        self.exclusive_mixer = None;
+        self.exclusive_track_rate = None;
+    }
+
+    /// 当前输出链路对应的 mixer（共享 sink 的，或独占自建的那个）
+    fn active_mixer(&self) -> Option<&Mixer> {
+        if let Some(m) = &self.exclusive_mixer {
+            return Some(m);
+        }
+        self.sink.as_ref().map(|s| s.mixer())
+    }
+
+    /// 把当前后端/格式/回退原因写进共享状态槽
+    fn publish(&self, backend: Backend, format: Option<String>) {
+        if let Ok(mut g) = self.status.lock() {
+            g.opened = true;
+            g.backend = backend;
+            g.format = format;
+            g.fallback = self.last_fallback.clone();
         }
     }
 
@@ -136,8 +382,17 @@ impl CoreAudio {
     }
 
     /// 取出并清空「输出流报错」标志（引擎每 tick 轮询一次）
+    ///
+    /// 独占渲染线程没有 cpal 那种错误回调：设备被拔/被抢时它只是**退出**，
+    /// 所以这里把「独占线程死了」也当成设备失效报给引擎（引擎会走 reset_device 重开）。
     pub fn take_device_error(&self) -> bool {
-        self.device_error.swap(false, Ordering::SeqCst)
+        let by_stream = self.device_error.swap(false, Ordering::SeqCst);
+        let by_exclusive = self
+            .exclusive
+            .as_ref()
+            .map(|s| !s.is_alive())
+            .unwrap_or(false);
+        by_stream || by_exclusive
     }
 
     pub fn set_volume(&mut self, volume: f32) {
@@ -147,33 +402,57 @@ impl CoreAudio {
         }
     }
 
-    /// 停止并摘除当前播放句柄
-    pub fn clear_player(&mut self) {
+    /// 只停掉当前播放句柄，**保留输出**。
+    /// 保留输出的意义：共享 sink / 独占渲染线程会继续跑，只是没有源可拉 ⇒ 持续吐静音。
+    /// 用于「在引擎线程上重新定位」的跳转（见 engine::seek_to）：那几百毫秒里
+    /// 绝对不能把独占设备关掉 —— 关了就要重开，还会多出一次可听空档。
+    pub fn stop_player(&mut self) {
         if let Some(p) = self.player.take() {
             p.stop();
         }
     }
 
-    /// 丢弃输出设备与播放句柄，强制下一次 new_player 重新打开默认设备。
-    /// 场景：设备被拔掉/切走（蓝牙断开、DAC 休眠、HDMI 热插拔）后，rodio 的流会静默失效，
-    /// 而 sink 仍是 Some ⇒ ensure() 会直接返回 Ok、复用那个已经死掉的设备，
+    /// 停止并摘除当前播放句柄。
+    /// ⚠️ 独占路径要**同时停掉渲染线程**：它会一直占着设备的独占通道（共享模式没有这个负担）。
+    pub fn clear_player(&mut self) {
+        self.stop_player();
+        self.drop_exclusive();
+    }
+
+    /// 丢弃输出设备与播放句柄，强制下一次 new_player 重新打开设备。
+    /// 场景：设备被拔掉/切走（蓝牙断开、DAC 休眠、HDMI 热插拔）后，流会静默失效，
+    /// 而 sink 仍是 Some ⇒ 会直接返回 Ok、复用那个已经死掉的设备，
     /// 表现为「状态还是 playing，但一点声音都没有」。引擎的停滞看门狗据此重开（见 mod.rs）。
+    /// 顺带清掉「独占已被否决」的标记：设备换了一台，应该重新协商一次。
     pub fn reset_device(&mut self) {
         self.clear_player();
         self.sink = None;
+        self.exclusive_denied = false;
+        self.last_fallback = None;
     }
 
-    /// 建立新的播放句柄（音量自动跟随）
-    pub fn new_player(&mut self) -> Result<(), AppError> {
-        self.clear_player();
-        self.ensure()?;
-        let sink = self.sink.as_ref().expect("sink 由 ensure 保证");
-        let player = Player::connect_new(sink.mixer());
+    /// 建立新的播放句柄（音量自动跟随）。
+    ///
+    /// `track_rate` = 本次要播的曲目采样率（独占协商的第一候选）。
+    /// ⚠️ 这里**只停播放句柄、不拆输出**：独占链路在采样率相同的连续曲目之间要复用，
+    /// 否则每首歌都重开一次 WASAPI 客户端，曲间会多出一次几百毫秒的停顿。
+    /// 需要释放设备时（Stop / 换设备 / 恢复）走 clear_player / reset_device。
+    pub fn new_player(&mut self, track_rate: Option<u32>) -> Result<(), AppError> {
+        if let Some(p) = self.player.take() {
+            p.stop();
+        }
+        self.current_track_rate = track_rate;
+        let prefer = self.preferred.clone();
+        self.open_output(prefer.as_deref(), track_rate)?;
+        let mixer = self.active_mixer().expect("open_output 成功后必然有输出");
+        let player = Player::connect_new(mixer);
         player.set_volume(self.volume);
         self.player = Some(player);
         Ok(())
     }
 
+    /// 播放句柄是否存在（共享与独占都算）。
+    /// ⚠️ 语义是「有没有 Player」，不是「有没有 sink」—— 引擎的自然结束判定靠它 + player_empty()。
     pub fn sink_is_some(&self) -> bool {
         self.player.is_some()
     }
@@ -246,6 +525,54 @@ fn find_output_device_by_id(id: &str) -> Option<rodio::cpal::Device> {
 fn device_name(d: &rodio::cpal::Device) -> String {
     use rodio::cpal::traits::DeviceTrait;
     d.description().map(|x| x.name().to_string()).unwrap_or_else(|_| "?".into())
+}
+
+/// 取某台设备共享模式的默认采样率（独占协商的候选之一）。
+/// 共享默认率几乎一定是这台设备「原生」支持的那个率，所以它排在曲目率之后、48000 之前。
+fn shared_default_rate(id: Option<&str>) -> Option<u32> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let dev = match id {
+        Some(i) => find_output_device_by_id(i)?,
+        None => rodio::cpal::default_host().default_output_device()?,
+    };
+    dev.default_output_config().ok().map(|c| c.sample_rate())
+}
+
+/// 取某台设备共享模式的默认声道数。独占路径按它建 mixer，不做声道上下变换。
+fn shared_default_channels(id: Option<&str>) -> Option<u16> {
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let dev = match id {
+        Some(i) => find_output_device_by_id(i)?,
+        None => rodio::cpal::default_host().default_output_device()?,
+    };
+    dev.default_output_config().ok().map(|c| c.channels())
+}
+
+/// usize 声道数 → rodio 的 ChannelCount（NonZero）。0 / 越界一律夹到合法值。
+fn nz_channels(channels: usize) -> ChannelCount {
+    NonZero::new(channels.clamp(1, u16::MAX as usize) as u16).unwrap_or_else(|| NonZero::new(1).unwrap())
+}
+
+/// u32 采样率 → rodio 的 SampleRate（NonZero）。0 视为 44100（调用方保证不会走到）。
+fn nz_rate(rate: u32) -> SampleRate {
+    NonZero::new(rate).unwrap_or_else(|| NonZero::new(44_100).unwrap())
+}
+
+/// 独占协商的采样率候选，按优先级：曲目采样率 → 设备共享默认率 → 48000 → 44100。
+/// 去重、保序，并丢掉明显非法的值（< 8kHz）。
+///
+/// 为什么需要「设备共享默认率」这一档：设备原生率往往正是它唯一能独占的率；
+/// 而 48000/44100 是最后的兜底（宁可重采样，也不要一点声音都没有）。
+fn exclusive_rate_candidates(track_rate: Option<u32>, device_default: Option<u32>) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for r in [track_rate, device_default, Some(48_000), Some(44_100)] {
+        if let Some(r) = r {
+            if r >= 8_000 && !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    }
+    out
 }
 
 /// 列出全部输出设备（设置页下拉用）。selected 是用户当前选中的 id。
@@ -463,6 +790,19 @@ pub fn open_decoder(path: &str) -> Result<TrackDecoder, AppError> {
     Ok(TrackDecoder::Symphonia(decoder))
 }
 
+/// 原地 seek 是否足够便宜 —— 决定它能不能在**音频线程**上执行。
+///
+/// root cause（用户报的「DSD 快进时出现电音，跳得越远电音越长」）：
+/// rodio 的 `Player::try_seek` 并不是在调用者线程里执行的 —— 它把 seek 请求塞进 controls，
+/// 由音频线程（独占渲染线程 / cpal 回调）在 periodic_access 里执行源自己的 try_seek。
+/// symphonia 是格式级定位（seek 文件 + 重置解码器，毫秒级），没问题；
+/// 而我们自己的三个 Source（DSD / ADTS / Opus）定位是 **O(跳转距离)** 的字节/帧遍历，
+/// 放在音频线程上就是几百毫秒的欠载：WASAPI 缓冲排空，驱动把旧数据反复吐出来。
+/// 所以只有 symphonia 允许走原地 seek，其余一律交给**引擎线程**上的重新定位（见 engine::seek_to）。
+pub fn inline_seek_is_cheap(path: &str) -> bool {
+    sniff(path).is_none()
+}
+
 
 #[cfg(test)]
 mod decoder_tests {
@@ -513,6 +853,27 @@ mod decoder_tests {
         assert_eq!(d.by_ref().take(4410).count(), 4410, "应能取到样本");
     }
 
+    /// 回归（用户报的「DSD 快进时出现电音，跳得越远电音越长」）：
+    /// rodio 的原地 seek 是在**音频线程**上执行的，只有 symphonia 的格式级定位够便宜；
+    /// 自定义源（DSD/ADTS/Opus）是 O(跳转距离) 的字节/帧遍历，必须交给引擎线程。
+    /// 这条守住这个分类 —— 分类错了电音就会回来。
+    #[test]
+    fn only_symphonia_formats_use_inline_seek() {
+        let wav = make_wav();
+        assert!(inline_seek_is_cheap(wav.to_str().unwrap()), "WAV 应允许原地 seek");
+        // DSD 容器头：sniff 只看前 4 字节
+        let dsf = std::env::temp_dir().join("oberon_inline_dsd.dsf");
+        let mut head = b"DSD ".to_vec();
+        head.extend_from_slice(&[0u8; 40]);
+        head[28..32].copy_from_slice(b"fmt ");
+        std::fs::write(&dsf, &head).unwrap();
+        assert!(!inline_seek_is_cheap(dsf.to_str().unwrap()), "DSD 绝不能走原地 seek");
+        // ADTS：syncword 12 位全 1 + layer 00
+        let aac = std::env::temp_dir().join("oberon_inline_adts.aac");
+        std::fs::write(&aac, [0xFFu8, 0xF1, 0x50, 0x80, 0x00, 0x1F, 0xFC]).unwrap();
+        assert!(!inline_seek_is_cheap(aac.to_str().unwrap()), "ADTS 绝不能走原地 seek");
+    }
+
     /// 嗅探：Ogg Vorbis 不能被误判成 Opus（两者都以 OggS 开头）
     #[test]
     fn sniff_does_not_misroute_vorbis() {
@@ -554,11 +915,122 @@ mod tests {
         assert!(core.take_device_error(), "置位后第一次取应为 true");
         assert!(!core.take_device_error(), "取过之后必须被清掉");
     }
+
+    /// 独占采样率候选：曲目率优先、设备默认率次之、48k/44.1k 兜底；去重保序、丢掉非法值
+    #[test]
+    fn exclusive_rate_candidates_order() {
+        assert_eq!(exclusive_rate_candidates(Some(44_100), Some(48_000)), vec![44_100, 48_000]);
+        // 曲目率就是设备率时去重
+        assert_eq!(exclusive_rate_candidates(Some(48_000), Some(48_000)), vec![48_000, 44_100]);
+        // 曲目率本机不支持也有兜底：调用方按顺序往下试（宁可重采样也不要没声音）
+        assert_eq!(
+            exclusive_rate_candidates(Some(88_200), Some(96_000)),
+            vec![88_200, 96_000, 48_000, 44_100]
+        );
+        // 读不到曲目率（例如恢复流程早期）：设备默认率打头
+        assert_eq!(exclusive_rate_candidates(None, Some(96_000)), vec![96_000, 48_000, 44_100]);
+        // 设备默认率也读不到：仍是 48k / 44.1k
+        assert_eq!(exclusive_rate_candidates(None, None), vec![48_000, 44_100]);
+        // 非法值被丢掉
+        assert_eq!(exclusive_rate_candidates(Some(0), Some(1)), vec![48_000, 44_100]);
+    }
+
+    /// 换模式 / 换设备必须重新给独占一次机会，否则一次回退就永久钉死在共享上
+    #[test]
+    fn mode_and_device_change_reset_exclusive_denial() {
+        let mut core = CoreAudio::default();
+        core.exclusive_denied = true;
+        // 同一个模式：不算变化，不该动标记（否则每次设置页读一次都会重开设备）
+        assert!(!core.set_mode(OutputMode::Auto));
+        assert!(core.exclusive_denied);
+        assert!(core.set_mode(OutputMode::Exclusive));
+        assert!(!core.exclusive_denied);
+        core.exclusive_denied = true;
+        assert!(core.set_preferred(Some("dev".into())));
+        assert!(!core.exclusive_denied);
+        // 同一台设备重复设置：无变化
+        assert!(!core.set_preferred(Some("dev".into())));
+    }
+
+    /// 独占协商失败必须「记下原因 + 不再反复重试」：
+    /// 用一台不存在的设备走完整条 open_output 路径（不会碰真声卡），
+    /// 断言 denied 与回退原因都被写入。
+    #[test]
+    fn exclusive_failure_records_fallback_reason() {
+        let status = Arc::new(Mutex::new(OutputStatus::default()));
+        let mut core = CoreAudio::new(status.clone());
+        assert!(core.set_mode(OutputMode::Exclusive));
+        assert!(core.set_preferred(Some("不存在的端点 id".into())));
+        // 指定的设备找不到 ⇒ 独占立刻失败；共享也开不了同一台设备 ⇒ 整体失败
+        assert!(core.new_player(Some(44_100)).is_err());
+        assert!(core.exclusive_denied, "独占失败后必须记下，避免每首歌都重试一次");
+        assert!(core.last_fallback.is_some(), "回退原因要留给设置页显示");
+        let st = core.output_status();
+        assert!(!st.opened, "共享也没开成功时不能把状态标成已打开");
+    }
+
+    /// 「重新尝试独占」要把上一次的回退结论清干净，否则设置页会一直挂着旧警告
+    #[test]
+    fn forget_fallback_clears_status_and_denial() {
+        let status = Arc::new(Mutex::new(OutputStatus {
+            opened: true,
+            backend: Backend::Shared,
+            format: None,
+            fallback: Some("该设备正被其它程序独占".into()),
+        }));
+        let mut core = CoreAudio::new(status.clone());
+        core.exclusive_denied = true;
+        core.last_fallback = Some("旧原因".into());
+        core.forget_fallback();
+        let st = core.output_status();
+        assert!(!st.opened, "状态应回到「尚未打开」");
+        assert!(st.fallback.is_none(), "回退原因要清掉");
+        assert!(!core.exclusive_denied, "要重新给独占一次机会");
+        assert!(core.last_fallback.is_none());
+    }
+
+    /// 真机实跑（默认 --ignored）：把 CoreAudio 切到独占，跑一段正弦，
+    /// 打印实际后端 / 格式 / 回退原因与播放位置 —— 这是「独占接进 CoreAudio」的硬证据。
+    ///
+    /// 为什么默认忽略：它会真的抢占声卡（跑测试时用户可能正在放歌），
+    /// 也会和 probe_all_smoke 抢同一台设备。手动跑：
+    ///   cargo test --lib -- --ignored --nocapture exclusive_coreaudio_plays
+    #[test]
+    #[ignore]
+    fn exclusive_coreaudio_plays() {
+        use rodio::Source;
+        init_com_for_audio();
+        let status = Arc::new(Mutex::new(OutputStatus::default()));
+        let mut core = CoreAudio::new(status.clone());
+        assert!(core.set_mode(OutputMode::Exclusive), "默认是 Auto，应能切到 Exclusive");
+        core.new_player(Some(44_100)).expect("打开输出（独占或回退共享）");
+        let st = core.output_status();
+        eprintln!("[test] 后端={:?} 格式={:?} 回退={:?}", st.backend, st.format, st.fallback);
+        // 频段选 440Hz / -20dB：能验证链路，又不至于把用户吓一跳
+        let src = rodio::source::SineWave::new(440.0)
+            .take_duration(Duration::from_millis(500))
+            .amplify(0.1);
+        core.player_append(TrackDecoder::Custom(Box::new(src)), BeatMeter::new());
+        std::thread::sleep(Duration::from_millis(800));
+        let pos = core.player_pos_secs();
+        let empty = core.player_empty();
+        eprintln!(
+            "[test] 播放位置={pos:.3}s 队列空={empty} 设备错误={}",
+            core.take_device_error()
+        );
+        assert!(pos > 0.2, "播放位置没有推进：独占/共享链路没在出样本（pos={pos}）");
+        core.clear_player();
+    }
 }
 
 /// 解码器总时长（部分格式可能未知，返回 None）
 pub fn decoder_duration(decoder: &TrackDecoder) -> Option<Duration> {
     decoder.total_duration()
+}
+
+/// 解码器采样率（Hz）。独占输出要用它决定 mixer / 设备采样率。
+pub fn decoder_sample_rate(decoder: &TrackDecoder) -> u32 {
+    decoder.sample_rate().get()
 }
 
 /// 解码器原地 seek（优先，毫秒级）；不支持时回退到排水

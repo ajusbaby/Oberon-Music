@@ -670,6 +670,11 @@
     text-overflow: ellipsis;
 }
 
+/* 独占回退等「用户需要知道」的提示：用警告色，但仍走 hint 的字号与省略规则 */
+.settings-hint.warn {
+    color: var(--color-warn, #B26A00);
+}
+
 .settings-value {
     font-size: 13.5px;
     color: var(--color-text-secondary);
@@ -2505,6 +2510,8 @@
     --color-hover: rgba(255, 255, 255, 0.06);
     --color-active: rgba(255, 255, 255, 0.10);
     --color-sidebar: #17171A;
+    /* 警告色（如独占回退原因）：深色底上要用更亮的 Amber */
+    --color-warn: #E8A33D;
     --card-glass-bg: #1B1B1F;
     --shadow-card: 0 5px 20px rgba(0, 0, 0, 0.35);
     --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.45);

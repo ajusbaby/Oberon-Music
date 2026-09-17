@@ -142,6 +142,18 @@ export interface ExclusiveDeviceCaps {
   initHint: string | null;
 }
 
+/** 当前实际生效的输出后端状态（由引擎线程写入，设置页轮询） */
+export interface OutputStatus {
+  /** 引擎是否已经打开过输出（false = 还没播过，后端未定） */
+  opened: boolean;
+  /** 实际在用的后端 */
+  backend: "shared" | "exclusive";
+  /** 独占时实际生效的格式，如 "44100/24-32"；共享时为 null */
+  format: string | null;
+  /** 回退共享的原因（中文，可直接显示）；没回退时为 null */
+  fallback: string | null;
+}
+
 export interface LibraryStats {
   trackCount: number;
   artistCount: number;

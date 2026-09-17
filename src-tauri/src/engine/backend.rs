@@ -61,8 +61,100 @@ pub const FMT_PREF: [Fmt; 5] = [
 /// 常用采样率（44.1k 家族 + 48k 家族，含 DSD 的 176.4k 家族）
 pub const RATES: [usize; 8] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 705_600];
 
+/// 输出模式（设置项 outputMode）。
+///
+/// ⚠️ **Exclusive 也会回退共享**。这不是「不听话」，而是刻意的：
+/// 独占失败的常见原因（设备被别的程序占了、系统禁用了独占、设备不支持目标格式）都不是
+/// 「放不出声」的理由，静默失败才是用户最不能接受的（见开发计划 §4 的第一条风险）。
+/// 所以三种模式的区别只在于「允不允许尝试独占」，失败一律出声并把原因显示出来。
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputMode {
+    /// 自动：优先独占，失败回退共享（默认）
+    Auto,
+    /// 独占优先（用户明确选择）；同样会在失败时回退共享并给出原因
+    Exclusive,
+    /// 共享（系统混音器），行为与历史版本一致
+    Shared,
+}
+
+impl OutputMode {
+    /// 解析设置项；缺键 / 空串 / 脏值一律回落到 Auto
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "exclusive" => Self::Exclusive,
+            "shared" => Self::Shared,
+            _ => Self::Auto,
+        }
+    }
+
+    /// 是否允许尝试独占输出（Shared 直接跳过协商）
+    pub fn allows_exclusive(&self) -> bool {
+        !matches!(self, Self::Shared)
+    }
+}
+
+/// 对「某设备 + 某采样率」按 [`FMT_PREF`] 的偏好顺序列出**驱动声明逐位支持**的格式。
+///
+/// 只做便宜的 `is_supported` 预检，真正的 `Initialize` 由调用方（`backend::try_open` /
+/// `exclusive::ExclusiveSink`）完成 —— 这样调用方可以先知道用哪个采样率建 mixer，
+/// 再去开设备（采样率必须与 mixer 一致，见 3.1.8 的教训）。
+///
+/// 每次调用都新开一个 `IAudioClient`：一旦 Initialize 过，再 Initialize 会返回
+/// AUDCLNT_E_ALREADY_INITIALIZED，会把「已经开过了」误读成「开不了」（见 3.1.7）。
+pub fn supported_formats(device_id: Option<&str>, rate: usize, channels: usize) -> Vec<Fmt> {
+    // WASAPI 基于 COM，每个线程都要自己初始化（重复初始化是 S_FALSE，正常）
+    let _ = wasapi::initialize_mta();
+    let Ok(enumr) = DeviceEnumerator::new() else { return Vec::new() };
+    let dev = match device_id {
+        Some(id) => enumr
+            .get_device(id)
+            .or_else(|_| enumr.get_default_device(&Direction::Render)),
+        None => enumr.get_default_device(&Direction::Render),
+    };
+    let Ok(dev) = dev else { return Vec::new() };
+    let Ok(client) = dev.get_iaudioclient() else { return Vec::new() };
+    FMT_PREF
+        .iter()
+        .copied()
+        .filter(|f| matches!(client.is_supported(&f.wave(rate, channels), &ShareMode::Exclusive), Ok(None)))
+        .collect()
+}
+
+/// 从多次尝试的失败里挑一个**对用户最有意义**的原因。
+///
+/// 为什么需要它：一次协商会按「曲目采样率 → 设备默认率 → 48000 → 44100」逐个试，
+/// 失败列表里往往混着「这个采样率不支持」这种**只代表某个候选**的错误。
+/// 直接报最后一条会把真实原因（设备被占用 / 系统禁用独占）盖掉。
+/// 权重：占用 / 禁用 = 5 > 失效 = 4 > 其它 = 3 > 对齐 = 2 > 不支持格式 = 1。
+/// 同权重取最早出现的一条（候选顺序 = 偏好顺序）。
+pub fn pick_fallback(errors: &[(Fallback, String)]) -> Option<(Fallback, String)> {
+    fn weight(f: Fallback) -> u8 {
+        match f {
+            Fallback::DeviceInUse | Fallback::ExclusiveDisabled => 5,
+            Fallback::DeviceInvalidated => 4,
+            Fallback::Other => 3,
+            Fallback::NeedsAlignment => 2,
+            Fallback::UnsupportedFormat => 1,
+        }
+    }
+    // 手写遍历而不是 max_by_key：后者在并列时返回**最后**一个，
+    // 而我们要保留最早出现的候选（候选顺序 = 偏好顺序）。
+    let mut best: Option<(Fallback, String)> = None;
+    let mut best_w = 0u8;
+    for (f, m) in errors {
+        let w = weight(*f);
+        if best.is_none() || w > best_w {
+            best_w = w;
+            best = Some((*f, m.clone()));
+        }
+    }
+    best
+}
+
 /// 为什么没用成独占（要原样告诉用户）
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// Copy 是必要的：pick_fallback 会按权重取值比较（见那里）
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub enum Fallback {
     /// 设备不支持请求的格式（0x88890008）
     UnsupportedFormat,
@@ -164,7 +256,7 @@ pub fn probe_all() -> Result<Vec<DeviceCaps>, AppError> {
             .get_device_format()
             .map(describe)
             .unwrap_or_else(|_| "(读取失败)".into());
-        let Ok(mut client) = dev.get_iaudioclient() else {
+        let Ok(client) = dev.get_iaudioclient() else {
             out.push(DeviceCaps {
                 name,
                 id,
@@ -317,6 +409,47 @@ mod tests {
         assert_eq!(Fmt::int(24, 24).label(), "24/24");
         assert_eq!(Fmt::int(32, 24).label(), "24/32");
         assert_eq!(Fmt::float(32).label(), "32f/32");
+    }
+
+    /// 设置项解析是白名单：脏值绝不能变成「强制独占」之外的意外行为
+    #[test]
+    fn output_mode_parse_is_whitelist() {
+        assert_eq!(OutputMode::parse("auto"), OutputMode::Auto);
+        assert_eq!(OutputMode::parse("exclusive"), OutputMode::Exclusive);
+        assert_eq!(OutputMode::parse("shared"), OutputMode::Shared);
+        assert_eq!(OutputMode::parse(""), OutputMode::Auto);
+        assert_eq!(OutputMode::parse("EXCLUSIVE"), OutputMode::Auto);
+        assert_eq!(OutputMode::parse("garbage"), OutputMode::Auto);
+        // 只有 shared 会跳过独占协商
+        assert!(OutputMode::Auto.allows_exclusive());
+        assert!(OutputMode::Exclusive.allows_exclusive());
+        assert!(!OutputMode::Shared.allows_exclusive());
+    }
+
+    /// 回退原因的挑选：不能被「某个候选采样率不支持」把真实原因盖掉
+    #[test]
+    fn pick_fallback_prefers_device_level_reason() {
+        let unsupported = (Fallback::UnsupportedFormat, "44100：不支持".to_string());
+        let other = (Fallback::Other, "别的".to_string());
+        let in_use = (Fallback::DeviceInUse, "被占用".to_string());
+        let disabled = (Fallback::ExclusiveDisabled, "系统禁用".to_string());
+        // 占用 > 其它 > 不支持格式
+        assert_eq!(
+            pick_fallback(&[unsupported.clone(), other.clone(), in_use.clone()]).unwrap().0,
+            Fallback::DeviceInUse
+        );
+        assert_eq!(
+            pick_fallback(&[unsupported.clone(), other.clone()]).unwrap().0,
+            Fallback::Other
+        );
+        // 同权重取最早出现的一条（候选顺序 = 偏好顺序）
+        assert_eq!(
+            pick_fallback(&[disabled.clone(), in_use.clone()]).unwrap().1,
+            "系统禁用"
+        );
+        // 只剩「不支持格式」时也要能给出那条
+        assert_eq!(pick_fallback(&[unsupported]).unwrap().0, Fallback::UnsupportedFormat);
+        assert!(pick_fallback(&[]).is_none());
     }
 
     /// 冒烟：探测要能跑完不 panic，并至少认出默认设备

@@ -34,6 +34,11 @@ pub struct ExclusiveSink {
     stop: Arc<AtomicBool>,
     played: Arc<AtomicU64>,
     dead: Arc<AtomicBool>,
+    /// 渲染线程句柄。stop() 会 join 它 —— **这是重开设备前必须的同步**：
+    /// 我们会在换曲 / 回退时立刻在同一台设备上新建一个 IAudioClient，
+    /// 上一个线程若还拿着设备不放，新的 Initialize 会拿到 AUDCLNT_E_DEVICE_IN_USE（0x8889000A），
+    /// 被误判成「设备被别的程序占用」。
+    handle: Option<std::thread::JoinHandle<()>>,
     format_label: String,
     rate: u32,
     channels: usize,
@@ -69,7 +74,7 @@ impl ExclusiveSink {
         let stop_t = stop.clone();
         let played_t = played.clone();
         let dead_t = dead.clone();
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             .name("oberon-wasapi-exclusive".into())
             .spawn(move || {
                 // ⚠️ WASAPI 基于 COM，且**每个线程都要自己初始化**。
@@ -99,24 +104,34 @@ impl ExclusiveSink {
                 stop,
                 played,
                 dead,
+                handle: Some(handle),
                 format_label: label,
                 rate,
                 channels,
             }),
             Ok(Err((f, e))) => {
                 stop.store(true, Ordering::SeqCst);
+                let _ = handle.join();
                 Err((f, e))
             }
             Err(_) => {
                 stop.store(true, Ordering::SeqCst);
+                let _ = handle.join();
                 Err((Fallback::Other, "独占渲染线程提前退出".into()))
             }
         }
     }
 
+    /// 停止渲染并**等线程真正退出**（它退出时会 stop_stream 并释放设备）。
+    /// 调用方紧接着可能在同一台设备上开新的独占流，所以这里必须同步等待。
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
     }
+    /// 已写入设备的帧数。渲染线程实时性靠它核对（examples 与手动排查用）。
+    #[allow(dead_code)]
     pub fn played_frames(&self) -> u64 {
         self.played.load(Ordering::Relaxed)
     }
@@ -137,7 +152,8 @@ impl ExclusiveSink {
 
 impl Drop for ExclusiveSink {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
+        // 与 stop() 同样要 join：drop 之后设备可能马上被下一首重新打开
+        self.stop();
     }
 }
 

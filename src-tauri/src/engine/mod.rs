@@ -17,7 +17,11 @@ pub mod opus;
 use crate::error::{AppError, AppResult};
 use crate::models::*;
 use crate::smtc::SmtcHandle;
-use audio::{endpoint_active, open_decoder, probe_default_output, seek_decoder, CoreAudio, DefaultOutput};
+use audio::{
+    endpoint_active, open_decoder, probe_default_output, seek_decoder, CoreAudio, DefaultOutput,
+    OutputStatus,
+};
+use backend::OutputMode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -47,6 +51,14 @@ pub enum EngineCommand {
     /// 切换输出设备（设置页「输出设备」）。None = 跟随系统默认。
     /// 立刻迁移：重开设备并尽量回到原来的播放位置。
     SetOutputDevice { id: Option<String> },
+    /// 切换输出模式（设置页「独占输出」：auto / exclusive / shared）。
+    /// 立刻生效：重开输出并尽量回到原来的播放位置（与 SetOutputDevice 同一套迁移流程）。
+    SetOutputMode { mode: OutputMode },
+    /// 重新协商一次输出后端（设置页「重新尝试独占」）。
+    /// 为什么需要单独一条：用户在 Windows 里改完独占设置后，模式本身没变，
+    /// SetOutputMode 不会触发重开；而引擎一旦回退过共享就会一直复用那个 sink。
+    /// 这条命令强制丢掉旧结论、重开一次输出。
+    RetryOutput,
     /// 停止引擎线程（预留：应用退出时显式收尾）
     #[allow(dead_code)]
     Shutdown,
@@ -85,6 +97,9 @@ pub struct EngineHandle {
     alive: Arc<AtomicBool>,
     /// 系统媒体控制句柄（setup 之后一次性填入，见 attach_smtc）
     smtc: Arc<OnceLock<SmtcHandle>>,
+    /// 输出后端状态（谁在出声 / 什么格式 / 为什么没走成独占）。
+    /// 由引擎线程在每次打开输出时写入，命令层只读 —— 见 audio::OutputStatus。
+    out_status: Arc<Mutex<OutputStatus>>,
 }
 
 impl EngineHandle {
@@ -118,6 +133,11 @@ impl EngineHandle {
         self.beat.clone()
     }
 
+    /// 当前输出后端状态（供 audio_output_status 命令）
+    pub fn output_status(&self) -> OutputStatus {
+        self.out_status.lock().map(|g| g.clone()).unwrap_or_default()
+    }
+
     #[allow(dead_code)]
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
@@ -140,16 +160,19 @@ pub fn spawn(app: tauri::AppHandle) -> EngineHandle {
     let meter = beat::BeatMeter::new();
     // SMTC 句柄由主线程稍后填入（那时才拿得到窗口句柄），引擎线程读同一个槽
     let smtc = Arc::new(OnceLock::<SmtcHandle>::new());
+    // 输出状态槽：引擎线程写、命令层读（音频设备全在引擎线程手里）
+    let out_status = Arc::new(Mutex::new(OutputStatus::default()));
     let shared2 = shared.clone();
     let alive2 = alive.clone();
     let meter2 = meter.clone();
     let smtc2 = smtc.clone();
+    let out_status2 = out_status.clone();
     std::thread::Builder::new()
         .name("audio-engine".into())
-        .spawn(move || run_engine(app, rx, shared2, alive2, meter2, smtc2))
+        .spawn(move || run_engine(app, rx, shared2, alive2, meter2, smtc2, out_status2))
         .expect("引擎线程创建失败");
 
-    EngineHandle { tx, shared, beat: meter, alive, smtc }
+    EngineHandle { tx, shared, beat: meter, alive, smtc, out_status }
 }
 
 // ---------------------------------------------------------------------------
@@ -226,12 +249,13 @@ fn run_engine(
     alive: Arc<AtomicBool>,
     meter: Arc<beat::BeatMeter>,
     smtc: Arc<OnceLock<SmtcHandle>>,
+    out_status: Arc<Mutex<OutputStatus>>,
 ) {
     // 本线程要调 CoreAudio 查默认输出端点状态：先把 COM 公寓准备好
     audio::init_com_for_audio();
 
     let mut ctx = EngineCtx {
-        core: CoreAudio::default(),
+        core: CoreAudio::new(out_status),
         queue: vec![],
         items: Arc::new(vec![]),
         order: Arc::new(vec![]),
@@ -471,6 +495,18 @@ fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandl
                 remigrate_output(ctx, app, shared);
             }
         }
+        EngineCommand::SetOutputMode { mode } => {
+            // 模式改了要重开输出才会生效：当前后端已经被固定下来了（见 CoreAudio::set_mode）。
+            // 复用与换设备同一套迁移流程（重开并尽量回到原位置）。
+            if ctx.core.set_mode(mode) {
+                remigrate_output(ctx, app, shared);
+            }
+        }
+        EngineCommand::RetryOutput => {
+            // 先清掉上次的回退结论，再重开输出；没有在播的曲目时状态会回到「尚未打开」。
+            ctx.core.forget_fallback();
+            remigrate_output(ctx, app, shared);
+        }
         EngineCommand::SetPreviousRestart { enabled } => {
             // 全文件唯一一个不调 sync_shared 的非空分支：该偏好不进 PlayerState 快照、
             // 不影响音频输出，sync 只会白发一次内容毫无变化的状态事件
@@ -570,34 +606,38 @@ fn try_load(ctx: &mut EngineCtx, i: usize) -> LoadAttempt {
     ctx.last_pos = 0.0;
     ctx.stalled_ticks = 0;
 
-    if ctx.core.new_player().is_err() {
-        return LoadAttempt::DeviceError;
-    }
-    match open_decoder(&item.path) {
-        Ok(decoder) => {
-            let duration = audio::decoder_duration(&decoder).map(|d| d.as_secs_f64());
-            if let Some(d) = duration {
-                if let Some(q) = ctx.queue.get_mut(i) {
-                    q.duration_secs = d;
-                }
-                // 同步进 IPC 形态的缓存。Arc::make_mut 只在还有别的持有者时克隆一次队列
-                // （sync_shared 刚发出去过一份），即每首歌开头付一次 O(n) ——
-                // 相比原来「每条命令都重建整条队列」，这已经不是一个量级了。
-                if let Some(it) = Arc::make_mut(&mut ctx.items).get_mut(i) {
-                    it.duration_secs = d;
-                }
-            }
-            ctx.core.player_append(decoder, ctx.beat.clone());
-            ctx.status = PlayerStatus::Playing;
-            ctx.suppress_end = false;
-            LoadAttempt::Loaded
-        }
+    // 先开解码器、再开输出：独占模式要用曲目采样率去协商设备格式，
+    // 而设备一旦打开就固定了采样率（mixer 与设备率不一致 = 变速播放，见 3.2.8）。
+    let decoder = match open_decoder(&item.path) {
+        Ok(d) => d,
         Err(e) => {
             ctx.loaded = None;
             ctx.suppress_end = false;
-            LoadAttempt::TrackError { code: e.code.to_string(), message: e.message.clone(), track_id: item.track_id }
+            return LoadAttempt::TrackError {
+                code: e.code.to_string(),
+                message: e.message.clone(),
+                track_id: item.track_id,
+            };
+        }
+    };
+    if ctx.core.new_player(Some(audio::decoder_sample_rate(&decoder))).is_err() {
+        return LoadAttempt::DeviceError;
+    }
+    if let Some(d) = audio::decoder_duration(&decoder).map(|d| d.as_secs_f64()) {
+        if let Some(q) = ctx.queue.get_mut(i) {
+            q.duration_secs = d;
+        }
+        // 同步进 IPC 形态的缓存。Arc::make_mut 只在还有别的持有者时克隆一次队列
+        // （sync_shared 刚发出去过一份），即每首歌开头付一次 O(n) ——
+        // 相比原来「每条命令都重建整条队列」，这已经不是一个量级了。
+        if let Some(it) = Arc::make_mut(&mut ctx.items).get_mut(i) {
+            it.duration_secs = d;
         }
     }
+    ctx.core.player_append(decoder, ctx.beat.clone());
+    ctx.status = PlayerStatus::Playing;
+    ctx.suppress_end = false;
+    LoadAttempt::Loaded
 }
 
 /// 上报本次装载跳过/失败的曲目。
@@ -641,31 +681,32 @@ fn load_paused(ctx: &mut EngineCtx, i: usize, app: &tauri::AppHandle) {
     ctx.pos_base = 0.0;
     ctx.last_pos = 0.0;
     ctx.stalled_ticks = 0;
-    if ctx.core.new_player().is_err() {
-        ctx.status = PlayerStatus::Paused;
-        emit_error(app, "AUDIO_DEVICE", "无法打开音频输出设备（WASAPI）", Some(item.track_id));
-        return;
-    }
-    match open_decoder(&item.path) {
-        Ok(decoder) => {
-            if let Some(d) = audio::decoder_duration(&decoder).map(|d| d.as_secs_f64()) {
-                if let Some(q) = ctx.queue.get_mut(i) {
-                    q.duration_secs = d;
-                }
-                if let Some(it) = Arc::make_mut(&mut ctx.items).get_mut(i) {
-                    it.duration_secs = d;
-                }
-            }
-            ctx.core.player_pause();
-            ctx.core.player_append(decoder, ctx.beat.clone());
-            ctx.status = PlayerStatus::Paused;
-        }
+    // 与 try_load 同样：先解码拿采样率，再开输出（独占要按曲目率协商）
+    let decoder = match open_decoder(&item.path) {
+        Ok(d) => d,
         Err(err) => {
             ctx.status = PlayerStatus::Paused;
             ctx.loaded = None;
             emit_error(app, &err.code, &err.message, Some(item.track_id));
+            return;
+        }
+    };
+    if ctx.core.new_player(Some(audio::decoder_sample_rate(&decoder))).is_err() {
+        ctx.status = PlayerStatus::Paused;
+        emit_error(app, "AUDIO_DEVICE", "无法打开音频输出设备（WASAPI）", Some(item.track_id));
+        return;
+    }
+    if let Some(d) = audio::decoder_duration(&decoder).map(|d| d.as_secs_f64()) {
+        if let Some(q) = ctx.queue.get_mut(i) {
+            q.duration_secs = d;
+        }
+        if let Some(it) = Arc::make_mut(&mut ctx.items).get_mut(i) {
+            it.duration_secs = d;
         }
     }
+    ctx.core.player_pause();
+    ctx.core.player_append(decoder, ctx.beat.clone());
+    ctx.status = PlayerStatus::Paused;
 }
 
 /// gapless 预排：把下一首解码后 append 到**同一个 Player**。
@@ -1031,10 +1072,16 @@ fn seek_to(ctx: &mut EngineCtx, pos_secs: f64, app: &tauri::AppHandle) {
     let target = if dur > 0.0 { pos_secs.min(dur) } else { pos_secs };
     ctx.seek_offset = target;
 
-    // 首选：原地 seek（symphonia 格式级定位，毫秒级、不打断播放）。
+    // 原地 seek（symphonia 格式级定位，毫秒级、不打断播放）。
     // 之前是"清空播放器 + 重解码 + 逐样本排水"，拖到几十秒后要几秒才到位，
     // 前端进度条与歌词都要等它，表现为"歌词定位非常慢"。
-    if ctx.core.player_seek(Duration::from_secs_f64(target)) {
+    //
+    // ⚠️ 只有**便宜的**定位才允许走这条：rodio 的原地 seek 实际是在音频线程上执行的，
+    //    而 DSD/ADTS 的定位是 O(跳转距离) 的字节/帧遍历 —— 放音频线程上就是几百毫秒欠载，
+    //    用户听到的正是「跳得越远、电音越长」。所以自定义源一律走下面那条引擎线程的路径。
+    if audio::inline_seek_is_cheap(&item.path)
+        && ctx.core.player_seek(Duration::from_secs_f64(target))
+    {
         // 原地 seek 后播放器位置就是目标位置，seek_offset 必须归零，
         // 否则 current_item 会把位置算成「新位置 + 目标」= 两倍（实测跳到 29.3s 的句子显示 59.6s）
         ctx.seek_offset = 0.0;
@@ -1042,14 +1089,16 @@ fn seek_to(ctx: &mut EngineCtx, pos_secs: f64, app: &tauri::AppHandle) {
         return;
     }
 
-    // 回退：重解码（此时 seek_decoder 也会先尝试解码器原地定位）
+    // 引擎线程上的重新定位：重开解码器 → 按块/帧跳过（不做逐样本解码）→ 重挂到**同一个输出**。
+    // 用 stop_player 而不是 clear_player：跳转这几百毫秒里独占设备保持打开，
+    // 渲染线程只是拉不到样本（吐静音），不会欠载、也不会多一次设备重开。
     ctx.suppress_end = true;
-    ctx.core.clear_player();
+    ctx.core.stop_player();
     match open_decoder(&item.path) {
         Ok(mut decoder) => {
             let actual = seek_decoder(&mut decoder, Duration::from_secs_f64(target));
             ctx.seek_offset = actual;
-            if ctx.core.new_player().is_ok() {
+            if ctx.core.new_player(Some(audio::decoder_sample_rate(&decoder))).is_ok() {
                 ctx.core.player_append(decoder, ctx.beat.clone());
                 if was_paused {
                     pause_inner(ctx);
@@ -1062,6 +1111,8 @@ fn seek_to(ctx: &mut EngineCtx, pos_secs: f64, app: &tauri::AppHandle) {
             ctx.suppress_end = false;
         }
         Err(e) => {
+            // 解码都失败了，没必要继续占着输出（独占模式会把设备一直占住）
+            ctx.core.clear_player();
             ctx.status = PlayerStatus::Paused;
             ctx.suppress_end = false;
             emit_error(app, &e.code, &e.message, Some(item.track_id));

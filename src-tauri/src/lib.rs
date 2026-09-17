@@ -145,6 +145,8 @@ pub fn run() {
             commands::audio::audio_set_output_device,
             commands::audio::audio_output_mode,
             commands::audio::audio_set_output_mode,
+            commands::audio::audio_output_status,
+            commands::audio::audio_retry_output,
             // 歌词字体
             commands::fonts::font_save,
             commands::fonts::font_read,
