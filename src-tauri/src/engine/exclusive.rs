@@ -9,7 +9,7 @@
 //! 结果通过 channel 同步回报，所以调用方能拿到明确的成功/失败与原因。
 //! ⚠️ WASAPI 基于 COM，**每个线程都要自己 initialize_mta()** —— 这里在渲染线程开头做了。
 
-use super::backend::{classify, try_open, Fallback, Fmt, FMT_PREF, RATES};
+use super::backend::{classify, try_open, Fallback, Fmt};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -47,10 +47,15 @@ impl ExclusiveSink {
     /// - prefer_rate：优先尝试的采样率（一般传当前曲目的采样率）。
     ///
     /// 失败返回 (Fallback, 原始错误)，调用方据此回退共享模式并告诉用户原因。
-    pub fn start<S>(
+    /// ⚠️ 采样率必须与调用方创建 Mixer 时用的采样率**完全一致**。
+    /// 不一致的后果不是音质差一点，而是**变速播放** —— 我们已经在 current_span_len 那个
+    /// bug 上吃过一次（DSD 88.2k 之后接 44.1k 的曲子变成 2 倍速）。
+    /// 所以这里**不做自动协商**：由调用方「先定率 → 用同一个率建 Mixer → 再开这个」。
+    pub fn start_at<S>(
         device_id: Option<String>,
         source: S,
-        prefer_rate: Option<u32>,
+        rate: u32,
+        fmt: Fmt,
         channels: usize,
     ) -> Result<Self, (Fallback, String)>
     where
@@ -67,10 +72,14 @@ impl ExclusiveSink {
         std::thread::Builder::new()
             .name("oberon-wasapi-exclusive".into())
             .spawn(move || {
+                // ⚠️ WASAPI 基于 COM，且**每个线程都要自己初始化**。
+                //    少了这一行，整条独占路径都会失败（这条被编译警告抓到过一次）。
+                let _ = initialize_mta();
                 let r = render_loop(
                     device_id,
                     source,
-                    prefer_rate,
+                    rate,
+                    fmt,
                     channels,
                     &stop_t,
                     &played_t,
@@ -136,7 +145,8 @@ impl Drop for ExclusiveSink {
 fn render_loop<S>(
     device_id: Option<String>,
     mut source: S,
-    prefer_rate: Option<u32>,
+    rate: u32,
+    fmt: Fmt,
     channels: usize,
     stop: &AtomicBool,
     played: &AtomicU64,
@@ -160,34 +170,21 @@ where
         .get_iaudioclient()
         .map_err(|e| (Fallback::Other, format!("取 IAudioClient 失败: {e}")))?;
 
-    // 选格式：优先曲目采样率，再按偏好顺序遍历常用采样率
-    let mut rates: Vec<usize> = Vec::new();
-    if let Some(r) = prefer_rate {
-        rates.push(r as usize);
-    }
-    for r in RATES {
-        if !rates.contains(&r) {
-            rates.push(r);
+    // 校验调用方指定的 (rate, fmt)：必须被**逐位**支持。不自动协商（见 start_at 的说明）
+    let rate_us = rate as usize;
+    let wf = fmt.wave(rate_us, channels);
+    match client.is_supported(&wf, &ShareMode::Exclusive) {
+        Ok(None) => {}
+        Ok(Some(_)) => {
+            return Err((
+                Fallback::UnsupportedFormat,
+                format!("{rate}/{} 只能近似支持，不能 bit-perfect", fmt.label()),
+            ))
         }
+        Err(e) => return Err((Fallback::UnsupportedFormat, e.to_string())),
     }
-    let mut chosen: Option<(usize, Fmt)> = None;
-    'outer: for rate in rates {
-        for f in FMT_PREF {
-            let wf = f.wave(rate, channels);
-            if matches!(client.is_supported(&wf, &ShareMode::Exclusive), Ok(None)) {
-                chosen = Some((rate, f));
-                break 'outer;
-            }
-        }
-    }
-    let Some((rate, fmt)) = chosen else {
-        return Err((
-            Fallback::UnsupportedFormat,
-            "该设备在独占模式下没有任何可用格式".into(),
-        ));
-    };
 
-    let _period = try_open(&mut client, rate, fmt, channels).map_err(|e| (classify(&e), e))?;
+    let _period = try_open(&mut client, rate_us, fmt, channels).map_err(|e| (classify(&e), e))?;
     let event = client
         .set_get_eventhandle()
         .map_err(|e| (classify(&e.to_string()), e.to_string()))?;
