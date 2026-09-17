@@ -138,6 +138,8 @@ pub fn run() {
             commands::player::player_set_previous_restart,
             commands::player::player_cover,
         commands::player::track_lyrics,
+            // WASAPI 独占能力探测（设置页「独占输出」用）
+            engine::backend::audio_exclusive_probe,
             // 输出设备
             commands::audio::audio_output_devices,
             commands::audio::audio_set_output_device,

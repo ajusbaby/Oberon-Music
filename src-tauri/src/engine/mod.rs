@@ -8,6 +8,7 @@
 
 pub mod adts;
 pub mod audio;
+pub mod backend;
 pub mod beat;
 pub mod dsd;
 pub mod opus;
