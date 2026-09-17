@@ -36,6 +36,7 @@ opus-pure = "0.2.1"
 symphonia = "0.5.5"
 dsd-reader = "0.4.0"
 id3 = "1.17.1"
+wasapi = "0.24.0"
 
 # Windows 系统媒体控制（SMTC）：媒体键 / 蓝牙耳机 / 锁屏 / 系统媒体面板。
 # 复用 tauri 与 wry 已经带进依赖树的 windows 0.61（见 Cargo.lock 的 windows 0.61.3），
