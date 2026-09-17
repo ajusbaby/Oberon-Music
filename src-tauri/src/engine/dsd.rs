@@ -436,10 +436,6 @@ mod tests {
     /// 合成一个合法的 DSF：单/双声道、指定时长的 1 kHz 正弦。
     /// 1-bit 流用**二阶 sigma-delta** 编码（比一阶的信噪比好很多，否则测试测的是编码噪声）。
     /// 数据按 DSF 规范以 block_size 为单位**逐声道分块交错**存放。
-    fn make_dsf(freq: f32, seconds: f32, channels: usize) -> std::path::PathBuf {
-        make_dsf_at("oberon_dsd_test.dsf", freq, seconds, channels)
-    }
-
     /// 每个测试用**独立文件名** —— 它们在同一个进程里并行跑，共用路径会互相踩
     fn make_dsf_at(name: &str, freq: f32, seconds: f32, channels: usize) -> std::path::PathBuf {
         const RATE: u32 = 2_822_400; // DSD64
@@ -579,7 +575,7 @@ mod tests {
     /// 端到端：合成 1 kHz 的 DSF → 解码 → 输出应当是 88.2k/立体声、且主频确为 1 kHz
     #[test]
     fn decodes_dsf_to_expected_tone() {
-        let p = make_dsf(1000.0, 1.0, 2);
+        let p = make_dsf_at("oberon_dsd_tone.dsf", 1000.0, 1.0, 2);
         let mut src = DsdSource::open(p.to_str().unwrap()).expect("打开 .dsf");
         assert_eq!(src.channels().get(), 2, "声道数");
         assert_eq!(src.sample_rate().get(), 88_200, "抽取比应让输出落到 88.2k");
@@ -606,7 +602,7 @@ mod tests {
     /// 后者会把整段 DSD 重新过一遍 FIR，186MB 的文件就是几十亿次乘加（用户报的卡死）。
     #[test]
     fn seek_is_cheap_and_correct() {
-        let p = make_dsf(1000.0, 1.0, 2);
+        let p = make_dsf_at("oberon_dsd_seek.dsf", 1000.0, 1.0, 2);
         let mut src = DsdSource::open(p.to_str().unwrap()).expect("open");
         let t0 = std::time::Instant::now();
         src.try_seek(Duration::from_secs_f64(0.75))
@@ -657,7 +653,7 @@ mod tests {
     /// 元数据支路（扫描层靠它把 DSD 收进库）
     #[test]
     fn probe_reports_container_facts() {
-        let p = make_dsf(1000.0, 1.0, 2);
+        let p = make_dsf_at("oberon_dsd_probe.dsf", 1000.0, 1.0, 2);
         let m = probe(p.to_str().unwrap()).expect("probe 应成功");
         assert_eq!(m.sample_rate, 2_822_400, "DSD64 采样率");
         assert_eq!(m.channels, 2);
