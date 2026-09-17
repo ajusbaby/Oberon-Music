@@ -34,6 +34,11 @@ impl Fmt {
         let ty = if self.is_float { SampleType::Float } else { SampleType::Int };
         WaveFormat::new(self.store, self.valid, &ty, rate, channels, None)
     }
+    /// 每帧占多少字节（已按交错计算）
+    pub fn bytes_per_frame(&self, channels: usize) -> usize {
+        self.store / 8 * channels
+    }
+
     /// 给用户看的标签：有效位/容器位（24/32 = 32 位容器装 24 位）
     pub fn label(&self) -> String {
         if self.is_float {
