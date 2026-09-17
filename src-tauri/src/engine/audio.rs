@@ -120,7 +120,8 @@ impl CoreAudio {
             endpoint_id: None,
             endpoint_name: None,
             preferred: None,
-            mode: OutputMode::Auto,
+            // 默认输出模式 = 共享（设置项 outputMode 缺键时也是它，见 state.rs）
+            mode: OutputMode::Shared,
             last_fallback: None,
             current_track_rate: None,
             status,
@@ -995,8 +996,9 @@ mod tests {
     fn mode_and_device_change_reset_exclusive_denial() {
         let mut core = CoreAudio::default();
         core.exclusive_denied = true;
-        // 同一个模式：不算变化，不该动标记（否则每次设置页读一次都会重开设备）
-        assert!(!core.set_mode(OutputMode::Auto));
+        // 同一个模式：不算变化，不该动标记（否则每次设置页读一次都会重开设备）。
+        // 默认模式是 Shared，所以拿 Shared 来测「无变化」
+        assert!(!core.set_mode(OutputMode::Shared));
         assert!(core.exclusive_denied);
         assert!(core.set_mode(OutputMode::Exclusive));
         assert!(!core.exclusive_denied);
@@ -1061,7 +1063,7 @@ mod tests {
         init_com_for_audio();
         let status = Arc::new(Mutex::new(OutputStatus::default()));
         let mut core = CoreAudio::new(status.clone());
-        assert!(core.set_mode(OutputMode::Exclusive), "默认是 Auto，应能切到 Exclusive");
+        assert!(core.set_mode(OutputMode::Exclusive), "默认是 Shared，应能切到 Exclusive");
         core.new_player(Some(44_100)).expect("打开输出（独占或回退共享）");
         let st = core.output_status();
         eprintln!("[test] 后端={:?} 格式={:?} 回退={:?}", st.backend, st.format, st.fallback);

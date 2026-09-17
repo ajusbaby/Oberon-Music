@@ -80,14 +80,14 @@ impl AppState {
             .filter(|s| !s.is_empty());
         engine.send(crate::engine::EngineCommand::SetOutputDevice { id: output_device }).ok();
 
-        // 输出模式（设置项 outputMode；缺键 / 脏值 = auto）。
+        // 输出模式（设置项 outputMode；缺键 / 脏值 = shared —— 默认共享）。
         // 同样要在第一首歌装载之前送到 —— 它决定第一首歌走共享还是先协商独占。
         let output_mode = db
             .lock()
             .ok()
             .and_then(|g| crate::db::settings_get(&g, "outputMode").ok().flatten())
             .map(|s| crate::engine::backend::OutputMode::parse(&s))
-            .unwrap_or(crate::engine::backend::OutputMode::Auto);
+            .unwrap_or(crate::engine::backend::OutputMode::Shared);
         engine.send(crate::engine::EngineCommand::SetOutputMode { mode: output_mode }).ok();
 
         let (tx, rx) = std::sync::mpsc::channel::<WatchMsg>();

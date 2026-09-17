@@ -42,10 +42,10 @@ pub async fn audio_set_output_device(
     Ok(())
 }
 
-/// 设置键：输出模式（auto / exclusive / shared；缺键 = auto）
+/// 设置键：输出模式（auto / exclusive / shared；缺键 = shared —— 默认共享）
 pub const KEY_OUTPUT_MODE: &str = "outputMode";
 
-/// 读取当前输出模式（缺键或脏值一律回落到 auto）
+/// 读取当前输出模式（缺键或脏值一律回落到 shared）
 #[tauri::command]
 pub async fn audio_output_mode(state: State<'_, Arc<AppState>>) -> AppResult<String> {
     Ok(state
@@ -54,7 +54,7 @@ pub async fn audio_output_mode(state: State<'_, Arc<AppState>>) -> AppResult<Str
         .ok()
         .and_then(|g| crate::db::settings_get(&g, KEY_OUTPUT_MODE).ok().flatten())
         .filter(|s| matches!(s.as_str(), "auto" | "exclusive" | "shared"))
-        .unwrap_or_else(|| "auto".to_string()))
+        .unwrap_or_else(|| "shared".to_string()))
 }
 
 /// 设置输出模式。白名单校验，避免脏值写库。
@@ -65,7 +65,7 @@ pub async fn audio_set_output_mode(state: State<'_, Arc<AppState>>, mode: String
     let mode = if matches!(mode.as_str(), "auto" | "exclusive" | "shared") {
         mode
     } else {
-        "auto".to_string()
+        "shared".to_string()
     };
     // 先解析成枚举（Copy）：mode 这个 String 接下来要被移进阻塞任务写库
     let parsed = crate::engine::backend::OutputMode::parse(&mode);

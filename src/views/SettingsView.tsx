@@ -222,7 +222,8 @@ export function SettingsView() {
   );
 
   // 独占输出：模式选择 + **现场探测**（不假设用户设备支持什么，问一遍驱动再说）
-  const [outMode, setOutMode] = useState("auto");
+  // 默认输出模式 = 共享（与后端 state.rs / OutputMode::parse 的回落值一致）
+  const [outMode, setOutMode] = useState("shared");
   const [caps, setCaps] = useState<ExclusiveDeviceCaps[]>([]);
   const [probeBusy, setProbeBusy] = useState(false);
   useEffect(() => {
@@ -230,7 +231,7 @@ export function SettingsView() {
       try {
         setOutMode(await audioOutputMode());
       } catch {
-        /* 读不到就保持 auto */
+        /* 读不到就保持 shared（默认） */
       }
     })();
   }, []);
@@ -458,7 +459,8 @@ export function SettingsView() {
             <div className="settings-row-main">
               <div className="settings-label">输出模式</div>
               <div className="settings-hint">
-                独占模式绕过系统混音器（bit-perfect）；设备不支持时自动回退共享，并在下面说明原因
+                默认共享（走系统混音器）；选「自动 / 独占」才会尝试绕过混音器做 bit-perfect，
+                设备不支持时自动回退共享，并在下面说明原因
               </div>
             </div>
             <select

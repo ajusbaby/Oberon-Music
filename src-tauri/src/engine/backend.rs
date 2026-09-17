@@ -70,21 +70,21 @@ pub const RATES: [usize; 8] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000,
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum OutputMode {
-    /// 自动：优先独占，失败回退共享（默认）
+    /// 自动：优先独占，失败回退共享
     Auto,
     /// 独占优先（用户明确选择）；同样会在失败时回退共享并给出原因
     Exclusive,
-    /// 共享（系统混音器），行为与历史版本一致
+    /// 共享（系统混音器）—— **默认**。完全不碰独占，一切走系统混音器
     Shared,
 }
 
 impl OutputMode {
-    /// 解析设置项；缺键 / 空串 / 脏值一律回落到 Auto
+    /// 解析设置项；缺键 / 空串 / 脏值一律回落到 **Shared**（默认输出模式）
     pub fn parse(s: &str) -> Self {
         match s {
+            "auto" => Self::Auto,
             "exclusive" => Self::Exclusive,
-            "shared" => Self::Shared,
-            _ => Self::Auto,
+            _ => Self::Shared,
         }
     }
 
@@ -417,9 +417,10 @@ mod tests {
         assert_eq!(OutputMode::parse("auto"), OutputMode::Auto);
         assert_eq!(OutputMode::parse("exclusive"), OutputMode::Exclusive);
         assert_eq!(OutputMode::parse("shared"), OutputMode::Shared);
-        assert_eq!(OutputMode::parse(""), OutputMode::Auto);
-        assert_eq!(OutputMode::parse("EXCLUSIVE"), OutputMode::Auto);
-        assert_eq!(OutputMode::parse("garbage"), OutputMode::Auto);
+        // 缺键 / 脏值 = 默认输出模式 = 共享
+        assert_eq!(OutputMode::parse(""), OutputMode::Shared);
+        assert_eq!(OutputMode::parse("EXCLUSIVE"), OutputMode::Shared);
+        assert_eq!(OutputMode::parse("garbage"), OutputMode::Shared);
         // 只有 shared 会跳过独占协商
         assert!(OutputMode::Auto.allows_exclusive());
         assert!(OutputMode::Exclusive.allows_exclusive());
