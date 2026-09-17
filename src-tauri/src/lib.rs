@@ -3,6 +3,8 @@
 
 mod commands;
 mod db;
+// 性能基准用的公开解码入口（见 src/bench.rs 的说明）
+pub mod bench;
 mod engine;
 mod error;
 mod lyrics;
