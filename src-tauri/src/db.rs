@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     file_size    INTEGER NOT NULL DEFAULT 0,
     file_mtime   INTEGER NOT NULL DEFAULT 0,        -- 文件修改时间（秒），扫描去重用
     added_ms     INTEGER NOT NULL DEFAULT 0,
-    modified_ms  INTEGER NOT NULL DEFAULT 0
+    modified_ms  INTEGER NOT NULL DEFAULT 0,
+    play_count   INTEGER NOT NULL DEFAULT 0          -- 播放次数（按它排序；只在真正开始播放时自增）
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -107,6 +108,33 @@ CREATE INDEX IF NOT EXISTS idx_pt_track ON playlist_tracks(track_id);
 "#,
     )
     .map_err(|e| AppError::new(crate::error::E_DB, format!("建表失败: {e}")))?;
+
+    // ---- 增量迁移：给老库补列 ----
+    // SQLite 没有 "ADD COLUMN IF NOT EXISTS"，所以只能先查 PRAGMA 再改。
+    // 0.4.1 及以前的库没有 play_count，这里补上；新库建表时就带了，会跳过。
+    add_column_if_missing(conn, "tracks", "play_count", "INTEGER NOT NULL DEFAULT 0")?;
+    Ok(())
+}
+
+/// 给已有表补一列（幂等）。
+/// `PRAGMA table_info` 的列序：0=cid、1=name、2=type、3=notnull、4=dflt_value、5=pk。
+fn add_column_if_missing(conn: &Connection, table: &str, column: &str, decl: &str) -> AppResult<()> {
+    let exists = {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+        let mut rows = stmt.query([])?;
+        let mut found = false;
+        while let Some(r) = rows.next()? {
+            if r.get::<_, String>(1)? == column {
+                found = true;
+                break;
+            }
+        }
+        found
+    };
+    if !exists {
+        conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))
+            .map_err(|e| AppError::new(crate::error::E_DB, format!("补列 {table}.{column} 失败: {e}")))?;
+    }
     Ok(())
 }
 
@@ -216,6 +244,13 @@ pub fn delete_track_by_id(conn: &Connection, id: i64) -> AppResult<()> {
     Ok(())
 }
 
+/// 播放次数 +1。曲目**真正开始播放**时由前端调用（见 playerStore 的播放计数）。
+/// ⚠️ 刻意不动 modified_ms：播放不是「内容被改动」，不该影响任何按修改时间的显示/排序。
+pub fn bump_play_count(conn: &Connection, id: i64) -> AppResult<()> {
+    conn.execute("UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
 /// 返回全部歌曲 id（扫描时做差集删除）
 pub fn all_track_ids(conn: &Connection) -> AppResult<Vec<i64>> {
     let mut stmt = conn.prepare("SELECT id FROM tracks")?;
@@ -309,13 +344,25 @@ pub fn list_tracks(conn: &Connection, f: &TrackFilter) -> AppResult<Paginated<Tr
     }
     let where_sql = if wheres.is_empty() { String::new() } else { format!("WHERE {}", wheres.join(" AND ")) };
 
-    let order = f.order.as_deref().unwrap_or(if matches!(f.sort.as_deref(), Some("date-added")) { "desc" } else { "asc" });
+    // 没显式给 order 时的默认方向：这几项都是「越大/越新/越常听越靠前」才符合直觉
+    let order = f.order.as_deref().unwrap_or(if matches!(
+        f.sort.as_deref(),
+        Some("date-added") | Some("size") | Some("play-count")
+    ) {
+        "desc"
+    } else {
+        "asc"
+    });
     let sort = match f.sort.as_deref() {
         Some("artist") => "t.artist COLLATE NOCASE",
         Some("album") => "t.album COLLATE NOCASE",
         Some("year") => "t.year",
         Some("duration") => "t.duration_ms",
         Some("date-added") => "t.added_ms",
+        // 排序方式按钮新增的三项（见 LibraryView 的 SORT_OPTIONS）
+        Some("size") => "t.file_size",
+        Some("mtime") => "t.file_mtime",
+        Some("play-count") => "t.play_count",
         _ => "t.title COLLATE NOCASE",
     };
     let order_sql = match order {
@@ -915,5 +962,63 @@ mod tests {
         settings_set(&conn, "volume", "80").unwrap();
         assert_eq!(settings_get(&conn, "volume").unwrap().as_deref(), Some("80"));
         assert_eq!(settings_get_all(&conn).unwrap().len(), 1);
+    }
+
+    /// 老库（0.4.1 及以前：tracks 没有 play_count）打开时**必须**被自动补列，且原有数据不丢。
+    /// 这是每次启动都会走的路径：迁移写错 = 所有老用户的 app 直接起不来。
+    #[test]
+    fn migrates_old_db_missing_play_count() {
+        let dir = std::env::temp_dir().join("oberon_migrate_play_count_test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("library.db3");
+        {
+            // 0.4.1 的 tracks 建表语句（**没有** play_count），再塞一行数据
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE tracks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    path TEXT NOT NULL UNIQUE,
+                    title TEXT NOT NULL DEFAULT '',
+                    artist TEXT NOT NULL DEFAULT '',
+                    album TEXT NOT NULL DEFAULT '',
+                    album_artist TEXT NOT NULL DEFAULT '',
+                    genre TEXT NOT NULL DEFAULT '',
+                    year INTEGER, track_no INTEGER, disc_no INTEGER,
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    sample_rate INTEGER, bitrate INTEGER, channels INTEGER,
+                    format TEXT NOT NULL DEFAULT '',
+                    cover_key TEXT,
+                    file_size INTEGER NOT NULL DEFAULT 0,
+                    file_mtime INTEGER NOT NULL DEFAULT 0,
+                    added_ms INTEGER NOT NULL DEFAULT 0,
+                    modified_ms INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO tracks (path, title) VALUES ('C:/Music/a.flac', 'A');",
+            )
+            .unwrap();
+        }
+        // 打开（= 真实启动路径）后：旧行还在，新列已补上且默认 0
+        let conn = open_db(&path).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM tracks", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "迁移不能丢数据");
+        let before: i64 = conn
+            .query_row("SELECT play_count FROM tracks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, 0);
+        bump_play_count(&conn, 1).unwrap();
+        let after: i64 = conn
+            .query_row("SELECT play_count FROM tracks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(after, 1);
+        // 幂等：再开一次不该重复补列，更不能把计数冲掉
+        let conn2 = open_db(&path).unwrap();
+        let again: i64 = conn2
+            .query_row("SELECT play_count FROM tracks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(again, 1, "重复打开不该重置计数");
+        drop(conn2);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

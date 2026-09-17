@@ -4,7 +4,17 @@
 export type PlayerStatus = "stopped" | "playing" | "paused";
 export type PlayMode = "sequential" | "loop-all" | "loop-one" | "shuffle";
 export type ScanStage = "started" | "scanning" | "done" | "cancelled" | "error";
-export type TrackSort = "title" | "artist" | "album" | "date-added" | "year" | "duration";
+/** 曲目排序键。size / mtime / play-count 由音乐库的「排序方式」按钮使用（见 LibraryView） */
+export type TrackSort =
+  | "title"
+  | "artist"
+  | "album"
+  | "date-added"
+  | "year"
+  | "duration"
+  | "size"
+  | "mtime"
+  | "play-count";
 export type SortOrder = "asc" | "desc";
 
 /** 歌曲（tracks 表行） */

@@ -5,7 +5,22 @@ import * as api from "../api/ipc";
 import { playerEvents } from "../api/events";
 import { useSelectionStore } from "./selectionStore";
 import { toast } from "./uiStore";
-import type { PlayMode, PlayerState } from "../api/types";
+import type { PlayMode, PlayerState, PlayerStatus } from "../api/types";
+
+/**
+ * 播放计数：曲目**真正开始播放**时才 +1（音乐库「播放次数」排序靠它）。
+ *
+ * 判据是「当前曲目换了一个 id」且状态为 playing —— 列表点播、下一首、gapless 自动续播
+ * 都会经过 player-state 事件，所以这一处就够了，不必在每个播放入口各写一遍。
+ * 同一个 trackId 只算一次：暂停 → 继续、拖动进度都不会重复计数。
+ * 已知取舍：正在播的那首被再点一次（重头再播）不算新的一次播放。
+ */
+let lastCountedTrackId: number | null = null;
+function countPlayIfNew(id: number | null, status: PlayerStatus) {
+  if (id === null || status !== "playing" || id === lastCountedTrackId) return;
+  lastCountedTrackId = id;
+  void api.trackPlayed(id);
+}
 
 interface PlayerStoreState {
   state: PlayerState | null;
@@ -145,6 +160,8 @@ export async function initPlayerEvents() {
     const s = usePlayerStore.getState().state;
     // 事件不含完整队列：队列长度一致时保留本地队列，其余字段实时覆盖
     usePlayerStore.setState({ state: s ? { ...s, ...rest, queue: s.queue } : null });
+    // 播放计数（见文件顶部 countPlayIfNew 的说明）
+    countPlayIfNew(rest.current?.trackId ?? null, rest.status);
     // 队列发生变化（例如由外部命令或自动切换引起）时重新拉取完整状态
     if (!s || s.queue.length !== queueLen) {
       void usePlayerStore.getState().refresh();

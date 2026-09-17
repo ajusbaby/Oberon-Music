@@ -103,6 +103,7 @@ pub fn run() {
             // 曲库
             commands::library::library_stats,
             commands::library::tracks_list,
+            commands::library::track_played,
             commands::library::track_get,
             commands::library::tracks_by_ids,
             commands::library::albums_list,

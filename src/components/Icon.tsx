@@ -37,7 +37,8 @@ export type IconName =
   | "check"
   | "cast"
   | "layout-poster"
-  | "layout-center";
+  | "layout-center"
+  | "sort";
 
 // 侧栏导航三枚（home / search / library）为**有意偏离设计稿**：设计稿沿用的是 2014 版
 // Material 实心图标（大色块、直角、无细节留白），与本应用的细描边家族（repeat/shuffle/音量）
@@ -115,6 +116,8 @@ const PATHS: Record<IconName, string> = {
   // 歌词页布局切换：左栏实框 = 「左封面 + 右歌词」；三条居中横线 = 「歌词居中」
   "layout-poster": "M4 4h16v16H4zM10 4v16",
   "layout-center": "M6 8h12M4 12h16M6 16h12",
+  // 音乐库「排序方式」：三条递减横线（Material 的 sort），与 plus / more / trash 同属实心族
+  sort: "M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z",
 };
 
 /** 播放类图标：填充 + 同色描边把直角变成圆角（与磨砂玻璃圆角播放条配套） */
