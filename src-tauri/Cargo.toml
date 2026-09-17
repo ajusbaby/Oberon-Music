@@ -1,6 +1,6 @@
 [package]
 name = "oberon"
-version = "0.4.0"
+version = "0.4.1"
 description = "Oberon（Tauri 2 桌面内核）"
 edition = "2021"
 
