@@ -10,7 +10,7 @@
 //!   | profile(2) | sampling_frequency_index(4) | private(1) | channel_configuration(3)
 //!   | ... | frame_length(13) | buffer_fullness(11) | number_of_raw_data_blocks(2)
 //!
-//! seek 走默认实现（Err）→ 引擎的「重解码排水」兜底。
+//! seek：顺序走帧头定位（见 try_seek 的注释）；由引擎在**引擎线程**上调用。
 
 use crate::error::{AppError, E_DECODE, E_FILE_UNAVAILABLE};
 use rodio::source::{SeekError, Source};
@@ -287,9 +287,15 @@ impl Source for AdtsAacSource {
         self.total
     }
 
-    /// 原地定位：逐个读 ADTS 帧头（每帧只读 7 字节）走到目标帧，再从那继续解码。
-    /// ⚠️ 必须实现：否则 rodio 的原地 seek 失败 → 引擎退回「重开解码器 + 逐样本排水」，
-    /// 大文件（几十 MB 的 .aac）会卡住引擎线程。
+    /// 原地定位：顺序读 ADTS 帧头走到目标帧，再从那继续解码。
+    ///
+    /// ⚠️ **必须顺序读、不要每帧 seek**：旧实现是「每帧 seek 到 off 再读 7 字节」，
+    /// 而 `BufReader::seek` 会丢弃整个缓冲区 ⇒ 每帧一次 syscall。一首 5 分钟的 .aac 有
+    /// 一万多帧，跳到末尾就是一万多次 syscall。现在用 take 丢弃帧体，缓冲区一次读满很多帧：
+    /// 读的字节量相同，但 syscall 少了三个数量级。
+    ///
+    /// ⚠️ 这个函数现在**只在引擎线程上被调用**（见 engine::seek_to 的 routing）：
+    /// 它仍然是 O(跳转距离) 的工作量，绝不能让它跑在音频线程上。
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
         let err = || SeekError::NotSupported {
             underlying_source: "adts",
@@ -297,13 +303,9 @@ impl Source for AdtsAacSource {
         let target_frames =
             (pos.as_secs_f64() * self.sample_rate as f64 / AAC_FRAME_SAMPLES as f64) as u64;
         self.file.seek(SeekFrom::Start(0)).map_err(|_| err())?;
-        let mut off = 0u64;
         let mut n = 0u64;
         let mut hdr = [0u8; 7];
         while n < target_frames {
-            if self.file.seek(SeekFrom::Start(off)).is_err() {
-                break;
-            }
             if self.file.read_exact(&mut hdr).is_err() {
                 break;
             }
@@ -311,10 +313,14 @@ impl Source for AdtsAacSource {
             if (h.frame_len as u64) < 7 {
                 break;
             }
-            off += h.frame_len as u64;
+            let skip = h.frame_len as u64 - 7;
+            if skip > 0
+                && std::io::copy(&mut self.file.by_ref().take(skip), &mut std::io::sink()).is_err()
+            {
+                break;
+            }
             n += 1;
         }
-        self.file.seek(SeekFrom::Start(off)).map_err(|_| err())?;
         self.ts = n * AAC_FRAME_SAMPLES;
         self.out.clear();
         self.pos = 0;

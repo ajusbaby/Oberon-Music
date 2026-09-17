@@ -25,7 +25,7 @@ use id3::TagLike;
 use rodio::source::{SeekError, Source};
 use rodio::{ChannelCount, SampleRate};
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -55,6 +55,35 @@ fn is_dsd_container(path: &str) -> bool {
         return true;
     }
     false
+}
+
+/// DSF 的音频数据起始偏移（相对文件头）；DFF（或结构不认识）返回 None。
+///
+/// 走一遍 chunk 链，不假设固定 92 字节（标准文件的结果就是 92）。
+/// 有了它 DSF 才能用 `File::seek` 直接定位到第 k 块。
+fn dsf_data_offset(path: &str) -> Option<u64> {
+    let mut f = File::open(path).ok()?;
+    let mut h = [0u8; 92];
+    let n = f.read(&mut h).ok()? as u64;
+    if n < 92 || &h[0..4] != b"DSD " || &h[28..32] != b"fmt " {
+        return None;
+    }
+    let mut pos: u64 = 28;
+    loop {
+        if pos + 12 > n {
+            return None;
+        }
+        let at = pos as usize;
+        let id = &h[at..at + 4];
+        let size = u64::from_le_bytes(h[at + 4..at + 12].try_into().ok()?);
+        if id == b"data" {
+            return Some(pos + 12);
+        }
+        if size < 12 {
+            return None;
+        }
+        pos += size;
+    }
 }
 
 /// 低通抽头数
@@ -163,9 +192,112 @@ fn duration_of(bytes: u64, rate: u32, channels: u32) -> Duration {
     Duration::from_secs_f64(per_channel as f64 / rate.max(1) as f64)
 }
 
+/// 字节帧来源。两种实现产出的字节帧**逐字节一致**（有单测守着），
+/// 区别只在「能不能 O(1) 定位」。
+enum BlockSource {
+    /// dsd-reader 的迭代器：DFF 走这条（没有块结构，定位只能顺序跳过）
+    Iter(dsd_reader::DsdIter),
+    /// DSF 直读：有固定块结构 ⇒ `File::seek` 就能定位，跳转是 O(1)
+    Dsf(DsfBlocks),
+}
+
+impl BlockSource {
+    fn next_frame(&mut self) -> Option<(usize, Vec<Box<[u8]>>)> {
+        match self {
+            BlockSource::Iter(i) => i.next(),
+            BlockSource::Dsf(d) => d.next_frame(),
+        }
+    }
+}
+
+/// DSF 的字节帧读取器 —— 相对 `DsdIter` 只多一件事：**支持 O(1) 定位**。
+///
+/// 为什么需要：`DsdIter` 没有定位接口，只能从 0 顺序读到目标块。用户那个
+/// 195MB / 276s 的 .dsf 跳到 85% 要顺序过 166MB，实测 1.2 秒。虽然已经改到引擎线程上
+/// 执行（不再阻塞音频线程 ⇒ 不再有电音），但那 1.2 秒是**静音空档**，体验仍然是坏的。
+/// DSF 是分块的结构化容器（每声道固定 block_size 字节、按块交错），可以直接 seek 到第 k 块。
+///
+/// 输出的字节帧与 `DsdIter` 逐字节一致：每声道一块、LSB-first 原字节，
+/// 所以 `fill()` 的 FIR 逻辑完全不用改。
+struct DsfBlocks {
+    file: BufReader<File>,
+    data_offset: u64,
+    block_size: usize,
+    channels: usize,
+    /// 音频数据总字节数（所有声道合计）—— 与 DsdIter 的 bytes_remaining 同源
+    audio_length: u64,
+    /// 已经消费掉的**有效**音频字节数
+    consumed: u64,
+}
+
+impl DsfBlocks {
+    fn open(
+        path: &str,
+        data_offset: u64,
+        block_size: usize,
+        channels: usize,
+        audio_length: u64,
+    ) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let cap = (block_size * channels * 8).max(64 * 1024);
+        let mut file = BufReader::with_capacity(cap, file);
+        file.seek(SeekFrom::Start(data_offset))?;
+        Ok(Self {
+            file,
+            data_offset,
+            block_size: block_size.max(1),
+            channels: channels.max(1),
+            audio_length,
+            consumed: 0,
+        })
+    }
+
+    fn frame_size(&self) -> usize {
+        self.block_size * self.channels
+    }
+
+    /// O(1) 定位到第 index 帧（每帧 = 每个声道各一块）
+    fn seek_to_frame(&mut self, index: u64) -> std::io::Result<()> {
+        let off = index.saturating_mul(self.frame_size() as u64).min(self.audio_length);
+        self.file.seek(SeekFrom::Start(self.data_offset + off))?;
+        self.consumed = off;
+        Ok(())
+    }
+
+    /// 读下一帧；语义与 `DsdIter::next` 完全一致：
+    /// 文件尾仍然是**补齐过的整帧**，但按 audio_length 算出来的有效字节可能更少。
+    fn next_frame(&mut self) -> Option<(usize, Vec<Box<[u8]>>)> {
+        let remaining = self.audio_length.saturating_sub(self.consumed);
+        if remaining == 0 {
+            return None;
+        }
+        let frame = self.frame_size();
+        let valid_per_ch = if remaining >= frame as u64 {
+            self.block_size
+        } else {
+            (remaining / self.channels as u64) as usize
+        };
+        if valid_per_ch == 0 {
+            return None;
+        }
+        // 与 DsdIter 一样按整帧读（尾帧在盘上是补齐的）；读不满就当作结束
+        let mut buf = vec![0u8; frame];
+        if self.file.read_exact(&mut buf).is_err() {
+            return None;
+        }
+        let mut out: Vec<Box<[u8]>> = Vec::with_capacity(self.channels);
+        for ch in 0..self.channels {
+            let s = ch * self.block_size;
+            out.push(buf[s..s + valid_per_ch].to_vec().into_boxed_slice());
+        }
+        self.consumed += (valid_per_ch * self.channels) as u64;
+        Some((valid_per_ch * self.channels, out))
+    }
+}
+
 pub struct DsdSource {
-    iter: dsd_reader::DsdIter,
-    /// 重新打开容器要用（DsdIter 没有定位接口，seek 只能重开 + 按块跳过）
+    blocks: BlockSource,
+    /// 重新打开容器要用（DFF 定位只能重开 + 顺序跳过）
     path: String,
     /// 原始 DSD 采样率（Hz）
     dsd_rate_hz: u32,
@@ -205,13 +337,22 @@ impl DsdSource {
         let out_rate = rate_hz / decim;
         let total = Some(duration_of(reader.audio_length(), rate_hz, channels as u32));
         let block_size = reader.block_size();
-        let iter = reader
-            .dsd_iter()
-            .map_err(|e| AppError::new(E_DECODE, format!("无法读取 DSD 数据: {e}")))?;
+        // DSF 有块结构 ⇒ 用可 O(1) 定位的自读器；DFF（以及任何解析不出 data 偏移的）
+        // 继续用 dsd-reader 的迭代器。两者产出的字节帧逐字节一致。
+        let blocks = match dsf_data_offset(path).and_then(|off| {
+            DsfBlocks::open(path, off, block_size as usize, channels, reader.audio_length()).ok()
+        }) {
+            Some(d) => BlockSource::Dsf(d),
+            None => BlockSource::Iter(
+                reader
+                    .dsd_iter()
+                    .map_err(|e| AppError::new(E_DECODE, format!("无法读取 DSD 数据: {e}")))?,
+            ),
+        };
         let cutoff = 0.9 * 0.5; // 相对输出采样率的归一化截止（0.45 → 输出奈奎斯特的 90%）
         let taps = design_lowpass(cutoff / decim as f32);
         Ok(Self {
-            iter,
+            blocks,
             path: path.to_string(),
             dsd_rate_hz: rate_hz,
             block_size,
@@ -236,7 +377,7 @@ impl DsdSource {
         }
         let ch_n = self.channels as usize;
         loop {
-            let Some((read_size, blocks)) = self.iter.next() else {
+            let Some((read_size, blocks)) = self.blocks.next_frame() else {
                 self.ended = true;
                 return false;
             };
@@ -300,6 +441,17 @@ impl DsdSource {
             }
         }
     }
+
+    /// 定位之后把滤波状态整体重来：256 个输入样本只有 0.09ms，听不出来
+    fn reset_after_seek(&mut self) {
+        for c in self.carry.iter_mut() {
+            c.clear();
+        }
+        self.n_in = 0;
+        self.out.clear();
+        self.pos = 0;
+        self.ended = false;
+    }
 }
 
 impl Iterator for DsdSource {
@@ -335,39 +487,40 @@ impl Source for DsdSource {
 
     /// 原地定位。
     ///
-    /// ⚠️ 这个实现是**必须的**，不是为了精确 —— 没有它，rodio 的原地 seek 会失败，
-    /// 引擎就退回「重开解码器 + 逐样本排水到目标」那条路（见 engine/mod.rs 的 seek_to）：
-    /// 那会把整段 DSD 重新过一遍 FIR，186MB 的文件等于几十亿次乘加 —— 表现就是**快进卡死**。
+    /// ⚠️ 这个实现是**必须的**（不是为了精确）：没有它，引擎会退回「逐样本排水到目标」
+    /// 那条路 —— 186MB 的 DSD 等于几十亿次乘加，表现就是**快进卡死**。
     ///
-    /// DsdIter 不提供定位，所以只能：重开容器（只解析头，O(1)）+ 按**整块**跳过
-    /// （只读字节、不做任何滤波/解码）。跳过是纯 I/O，186MB 也就百毫秒级。
+    /// ⚠️ 调用位置同样关键：它现在**只在引擎线程上被调用**（见 engine::seek_to 的 routing）。
+    /// rodio 的 Player::try_seek 是在**音频线程**上执行源自己的 try_seek 的，
+    /// 而这里的定位是 O(跳转距离) 的工作量，跑在音频线程上就会欠载 ⇒ 电音。
+    ///
+    /// 两条路径：
+    /// - DSF：块结构已知 ⇒ `File::seek` 到第 k 块，**O(1)**（见 DsfBlocks）
+    /// - DFF：没有块结构 ⇒ 重开容器 + 逐帧跳过（O(距离)，只在引擎线程上跑，用户听到的是静音）
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        // 目标：按声道要跳过多少字节，再向下对齐到整块
+        let bits = (pos.as_secs_f64() * self.dsd_rate_hz as f64) as u64;
+        let block_bytes = self.block_size.max(1) as u64;
+        let target_block = (bits / 8) / block_bytes;
+
+        if let BlockSource::Dsf(d) = &mut self.blocks {
+            d.seek_to_frame(target_block).map_err(|_| seek_unsupported())?;
+            self.reset_after_seek();
+            return Ok(());
+        }
+
         let reader = DsdReader::from_container(PathBuf::from(&self.path))
             .map_err(|_| seek_unsupported())?;
         let mut iter = reader.dsd_iter().map_err(|_| seek_unsupported())?;
-
-        // 目标：按声道要跳过多少字节；再向下对齐到整块
-        let bits = (pos.as_secs_f64() * self.dsd_rate_hz as f64) as u64;
-        let block_bytes = self.block_size.max(1) as u64;
-        let mut blocks = (bits / 8) / block_bytes;
-        if blocks == 0 {
-            // 回到开头：直接换上新迭代器即可
-        }
-        while blocks > 0 {
+        let mut left = target_block;
+        while left > 0 {
             match iter.next() {
-                Some(_) => blocks -= 1,
+                Some(_) => left -= 1,
                 None => break,
             }
         }
-        self.iter = iter;
-        // 滤波状态整体重来：256 个输入样本只有 0.09ms，听不出来
-        for c in self.carry.iter_mut() {
-            c.clear();
-        }
-        self.n_in = 0;
-        self.out.clear();
-        self.pos = 0;
-        self.ended = false;
+        self.blocks = BlockSource::Iter(iter);
+        self.reset_after_seek();
         Ok(())
     }
 }
@@ -524,7 +677,142 @@ mod tests {
         p
     }
 
-    /// 端到端回归：DSD(88.2k) 播完接一首 44.1k 的曲子，**不能沿用上一首的采样率**转换。
+    /// DsfBlocks 与 dsd-reader 的 DsdIter 必须**逐字节一致**：
+    /// DSF 播放现在走的是 DsfBlocks（为了 O(1) 定位），一旦分块方式/位序/尾帧处理和
+    /// dsd-reader 不同，解码出来的就不是原来的声音（甚至变成噪声）。
+    #[test]
+    fn dsf_blocks_match_dsd_reader_byte_for_byte() {
+        let p = make_dsf_at("oberon_dsf_equiv.dsf", 1000.0, 0.5, 2);
+        let reader = DsdReader::from_container(p.clone()).unwrap();
+        let mut iter = reader.dsd_iter().unwrap();
+        let off = dsf_data_offset(p.to_str().unwrap()).expect("应能解析出 data 偏移");
+        let mut mine = DsfBlocks::open(
+            p.to_str().unwrap(),
+            off,
+            reader.block_size() as usize,
+            reader.channels_num(),
+            reader.audio_length(),
+        )
+        .unwrap();
+        let mut frames = 0;
+        loop {
+            match (iter.next(), mine.next_frame()) {
+                (None, None) => break,
+                (Some((na, ba)), Some((nb, bb))) => {
+                    assert_eq!(na, nb, "第 {frames} 帧有效字节数不一致");
+                    assert_eq!(ba.len(), bb.len(), "第 {frames} 帧声道数不一致");
+                    for ch in 0..ba.len() {
+                        assert_eq!(&ba[ch][..], &bb[ch][..], "第 {frames} 帧第 {ch} 声道字节不一致");
+                    }
+                    frames += 1;
+                }
+                (x, y) => panic!("结束位置不一致：iter={} mine={}", x.is_some(), y.is_some()),
+            }
+        }
+        assert!(frames > 10, "帧数太少: {frames}");
+        eprintln!("[test] DsfBlocks 与 DsdIter 逐字节一致，共 {frames} 帧");
+    }
+
+    /// 回归：DSF 的 O(1) 定位（File::seek）必须与「顺序跳过到同一块」落到同一位置、
+    /// 解出完全相同的样本 —— 否则定位会错位，听起来就是跑到别的地方去了。
+    #[test]
+    fn dsf_o1_seek_matches_sequential_skip() {
+        let p = make_dsf_at("oberon_dsf_seek_equiv.dsf", 1000.0, 1.0, 2);
+        let secs = 0.625;
+        // A：O(1) 路径（现网走这条）
+        let mut a = DsdSource::open(p.to_str().unwrap()).unwrap();
+        a.try_seek(Duration::from_secs_f64(secs)).unwrap();
+        let sa: Vec<f32> = a.by_ref().take(40_000).collect();
+        // B：顺序跳过路径（修复前的落点），改成 Iter 并跳到同一块
+        let mut b = DsdSource::open(p.to_str().unwrap()).unwrap();
+        {
+            let reader = DsdReader::from_container(p.clone()).unwrap();
+            let mut iter = reader.dsd_iter().unwrap();
+            let bits = (secs * b.dsd_rate_hz as f64) as u64;
+            let mut left = (bits / 8) / b.block_size.max(1) as u64;
+            while left > 0 {
+                match iter.next() {
+                    Some(_) => left -= 1,
+                    None => break,
+                }
+            }
+            b.blocks = BlockSource::Iter(iter);
+            b.reset_after_seek();
+        }
+        let sb: Vec<f32> = b.by_ref().take(40_000).collect();
+        assert_eq!(sa.len(), sb.len(), "两边解出的样本数不一致");
+        assert_eq!(sa, sb, "O(1) 定位与顺序跳过的解码结果必须完全一致");
+        eprintln!("[test] DSF O(1) 定位与顺序跳过一致（{} 个样本）", sa.len());
+    }
+
+    /// 真文件诊断（默认 --ignored）：跳到 85% 处的**定位延迟**与**音频线程停顿**。
+    ///
+    /// 修复前（顺序跳过 166MB，且由音频线程执行）：定位 1192ms、音频线程停顿 1250ms
+    /// ⇒ WASAPI 缓冲排空，用户听到「跳得越远电音越长」。
+    /// 修复后：DSF 有块结构 ⇒ `File::seek` 直接定位（O(1)）；并且自定义源的定位只在引擎线程执行。
+    ///
+    /// 手动跑（不设环境变量时用默认路径；文件不在就跳过）：
+    ///   $env:OBERON_DSD_TEST="D:\本地完整下载\交换余生.dsf"
+    ///   cargo test --lib -- --ignored --nocapture dsd_far_seek_is_fast
+    #[test]
+    #[ignore]
+    fn dsd_far_seek_is_fast() {
+        use std::sync::atomic::{AtomicBool, Ordering as O};
+        use std::sync::Arc;
+        use std::time::Instant;
+        let default_path = r"D:\本地完整下载\交换余生.dsf".to_string();
+        let path = std::env::var("OBERON_DSD_TEST").unwrap_or(default_path);
+        if !std::path::Path::new(&path).exists() {
+            eprintln!("[test] 跳过：找不到 DSD 测试文件（设 OBERON_DSD_TEST 指定）: {path}");
+            return;
+        }
+        let mut src = DsdSource::open(&path).expect("打开 DSD");
+        let dur = src.total_duration().map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let target = Duration::from_secs_f64(dur * 0.85);
+        eprintln!("[test] 文件 {path}：{dur:.1}s，跳到 {:.1}s", target.as_secs_f64());
+
+        // 1) 定位延迟本身（引擎线程上跑的就是它）
+        let t0 = Instant::now();
+        src.try_seek(target).expect("try_seek");
+        let seek_ms = t0.elapsed().as_secs_f64() * 1000.0;
+        eprintln!("[test] try_seek 延迟 {seek_ms:.1}ms（修复前 1192ms）");
+        assert!(seek_ms < 300.0, "定位还是慢：{seek_ms}ms（DSF 应走 File::seek 的 O(1) 路径）");
+        // 定位之后仍能解码出内容
+        let got = src.by_ref().take(88_200 * 2).count();
+        assert_eq!(got, 88_200 * 2, "定位之后应能继续解码");
+
+        // 2) 音频线程停顿：让 Player::try_seek 在拉取线程上执行（rodio 的真实行为）
+        let (mixer, mut out) = rodio::mixer::mixer(
+            NonZero::new(2).unwrap(),
+            NonZero::new(88_200).unwrap(),
+        );
+        let player = rodio::Player::connect_new(&mixer);
+        player.append(DsdSource::open(&path).unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let pull = std::thread::spawn(move || {
+            let mut last = Instant::now();
+            let mut worst = 0.0f64;
+            while !stop2.load(O::Relaxed) {
+                let _ = out.next();
+                let now = Instant::now();
+                let g = now.duration_since(last).as_secs_f64();
+                if g > worst {
+                    worst = g;
+                }
+                last = now;
+            }
+            worst
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        player.try_seek(target).expect("Player::try_seek");
+        stop.store(true, O::Relaxed);
+        let gap = pull.join().unwrap();
+        eprintln!("[test] 音频线程最长停顿 {:.1}ms（修复前 1250ms）", gap * 1000.0);
+        assert!(gap < 0.05, "音频线程仍被阻塞 {gap}s —— 电音会回来");
+    }
+
+/// 端到端回归：DSD(88.2k) 播完接一首 44.1k 的曲子，**不能沿用上一首的采样率**转换。
     /// 症状是下一首以 2 倍速播放（用户报的「切歌后声音奇怪且加速」）。
     /// 不用音频设备：建一个混音器，把两个音源追加到同一个 Player，数混音输出多少帧。
     #[test]
