@@ -143,6 +143,8 @@ pub fn run() {
             // 输出设备
             commands::audio::audio_output_devices,
             commands::audio::audio_set_output_device,
+            commands::audio::audio_output_mode,
+            commands::audio::audio_set_output_mode,
             // 歌词字体
             commands::fonts::font_save,
             commands::fonts::font_read,

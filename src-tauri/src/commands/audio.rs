@@ -41,3 +41,33 @@ pub async fn audio_set_output_device(
     state.engine.send(EngineCommand::SetOutputDevice { id })?;
     Ok(())
 }
+
+/// 设置键：输出模式（auto / exclusive / shared；缺键 = auto）
+pub const KEY_OUTPUT_MODE: &str = "outputMode";
+
+/// 读取当前输出模式（缺键或脏值一律回落到 auto）
+#[tauri::command]
+pub async fn audio_output_mode(state: State<'_, Arc<AppState>>) -> AppResult<String> {
+    Ok(state
+        .db
+        .lock()
+        .ok()
+        .and_then(|g| crate::db::settings_get(&g, KEY_OUTPUT_MODE).ok().flatten())
+        .filter(|s| matches!(s.as_str(), "auto" | "exclusive" | "shared"))
+        .unwrap_or_else(|| "auto".to_string()))
+}
+
+/// 设置输出模式。白名单校验，避免脏值写库。
+/// 注意：独占后端（渲染线程）还没接上，这里先只落库；接上之后要在这里同时
+/// 重开输出设备并按其结果回退（见 engine/backend.rs 的 Fallback）。
+#[tauri::command]
+pub async fn audio_set_output_mode(state: State<'_, Arc<AppState>>, mode: String) -> AppResult<()> {
+    let mode = if matches!(mode.as_str(), "auto" | "exclusive" | "shared") {
+        mode
+    } else {
+        "auto".to_string()
+    };
+    let db = state.db.clone();
+    db_run(db, move |c| Ok(crate::db::settings_set(c, KEY_OUTPUT_MODE, &mode)?)).await?;
+    Ok(())
+}

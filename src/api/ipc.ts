@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   LyricsResult,
-  Album, Artist, AudioDeviceInfo, FolderInfo, LibraryStats, Paginated, Playlist,
+  Album, Artist, AudioDeviceInfo, ExclusiveDeviceCaps, FolderInfo, LibraryStats, Paginated, Playlist,
   PlaylistDetail, PlayerState, PlayMode, QueuePosition, SearchResult, Track, TrackFilter,
 } from "./types";
 
@@ -30,6 +30,18 @@ export async function audioOutputDevices(): Promise<AudioDeviceInfo[]> {
 /** 选择输出设备；传 null / "" 表示跟随系统默认设备。落库并立刻迁移播放（保持进度）。 */
 export async function audioSetOutputDevice(id: string | null): Promise<void> {
   return invoke("audio_set_output_device", { id });
+}
+/** 现场探测每个输出设备的 WASAPI 独占能力（设置页「独占输出」用） */
+export async function audioExclusiveProbe(): Promise<ExclusiveDeviceCaps[]> {
+  return invoke("audio_exclusive_probe");
+}
+/** 读取输出模式（auto / exclusive / shared） */
+export async function audioOutputMode(): Promise<string> {
+  return invoke("audio_output_mode");
+}
+/** 设置输出模式；后端按白名单校验 */
+export async function audioSetOutputMode(mode: string): Promise<void> {
+  return invoke("audio_set_output_mode", { mode });
 }
 
 export async function libraryStats(): Promise<LibraryStats> {

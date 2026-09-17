@@ -3,8 +3,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import type { AudioDeviceInfo, PlayMode } from "../api/types";
-import { audioOutputDevices, audioSetOutputDevice, fontDelete } from "../api/ipc";
+import type { AudioDeviceInfo, ExclusiveDeviceCaps, PlayMode } from "../api/types";
+import {
+  audioExclusiveProbe,
+  audioOutputDevices,
+  audioOutputMode,
+  audioSetOutputDevice,
+  audioSetOutputMode,
+  fontDelete,
+} from "../api/ipc";
 import { Icon } from "../components/Icon";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -174,6 +181,51 @@ export function SettingsView() {
     },
     [outputId, refreshDevices]
   );
+
+  // 独占输出：模式选择 + **现场探测**（不假设用户设备支持什么，问一遍驱动再说）
+  const [outMode, setOutMode] = useState("auto");
+  const [caps, setCaps] = useState<ExclusiveDeviceCaps[]>([]);
+  const [probeBusy, setProbeBusy] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      try {
+        setOutMode(await audioOutputMode());
+      } catch {
+        /* 读不到就保持 auto */
+      }
+    })();
+  }, []);
+  const changeMode = useCallback(
+    async (mode: string) => {
+      const prev = outMode;
+      setOutMode(mode);
+      try {
+        await audioSetOutputMode(mode);
+        toast(
+          mode === "exclusive"
+            ? "已改为独占模式（设备不支持时自动回退共享）"
+            : mode === "shared"
+              ? "已改为共享模式"
+              : "已改为自动模式",
+          "success"
+        );
+      } catch (e) {
+        setOutMode(prev);
+        toast("切换输出模式失败：" + String(e), "error");
+      }
+    },
+    [outMode]
+  );
+  const probeCaps = useCallback(async () => {
+    setProbeBusy(true);
+    try {
+      setCaps(await audioExclusiveProbe());
+    } catch (e) {
+      toast("探测失败：" + String(e), "error");
+    } finally {
+      setProbeBusy(false);
+    }
+  }, []);
 
   // 歌词字体：按语言分槽（西文 / 中文 / 日文 / 韩文），一个语言一个字体。
   // 上传的字体**不做语言检测** —— 它在每一个槽的候选里都出现，由用户决定给哪个语言用。
@@ -358,6 +410,57 @@ export function SettingsView() {
               </button>
             </div>
           </div>
+        </div>
+        <div className="section-title">独占输出</div>
+        <div className="settings-block">
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">输出模式</div>
+              <div className="settings-hint">
+                独占模式绕过系统混音器（bit-perfect）；设备不支持时自动回退共享，并在下面说明原因
+              </div>
+            </div>
+            <select
+              className="settings-select"
+              value={outMode}
+              onChange={(e) => void changeMode(e.target.value)}
+            >
+              <option value="auto">自动（优先独占）</option>
+              <option value="exclusive">独占（bit-perfect）</option>
+              <option value="shared">共享（系统混音器）</option>
+            </select>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">独占能力探测</div>
+              <div className="settings-hint">
+                现场问驱动：这台设备在独占模式下支持哪些采样率/位深，并真实初始化一次试试
+              </div>
+            </div>
+            <button className="pill-btn" disabled={probeBusy} onClick={() => void probeCaps()}>
+              {probeBusy ? "探测中…" : "探测我的设备"}
+            </button>
+          </div>
+          {caps.map((c) => (
+            <div className="settings-row" key={c.id}>
+              <div className="settings-row-main">
+                <div className="settings-label">
+                  {c.name}
+                  {c.isDefault ? "（系统默认）" : ""}
+                </div>
+                <div className="settings-hint">共享默认：{c.sharedFormat}</div>
+                <div className="settings-hint">
+                  独占支持 {c.exclusive.length} 项
+                  {c.exclusive.length > 0 ? "：" + c.exclusive.join("、") : ""}
+                </div>
+                <div className="settings-hint">
+                  {c.initOk
+                    ? "实测可独占：" + c.initOk
+                    : "实测没开起来" + (c.initHint ? "：" + c.initHint : "")}
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
         <div className="section-title">音乐文件夹</div>
         <div className="settings-block">

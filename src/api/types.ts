@@ -127,6 +127,21 @@ export interface AudioDeviceInfo {
   isSelected: boolean;
 }
 
+/** WASAPI 独占能力探测结果（每个输出设备一条，来自后端**现场探测**而非猜测） */
+export interface ExclusiveDeviceCaps {
+  name: string;
+  id: string;
+  isDefault: boolean;
+  /** 共享模式下的默认格式，如 "48000Hz 24/32bit PCM 2ch" */
+  sharedFormat: string;
+  /** 独占模式支持的组合，如 ["44100/24-32", "48000/16-16"] */
+  exclusive: string[];
+  /** 实测能成功 Initialize 的组合；null = 没开起来 */
+  initOk: string | null;
+  /** 失败原因（已归因，可直接给用户看） */
+  initHint: string | null;
+}
+
 export interface LibraryStats {
   trackCount: number;
   artistCount: number;

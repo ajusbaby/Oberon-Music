@@ -117,7 +117,9 @@ pub fn aligned_period_hns(rate: usize, frames: u32) -> i64 {
 }
 
 /// 探测结果（前端展示用）
+// 前端用 camelCase（与本项目其它模型一致）
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeviceCaps {
     pub name: String,
     pub id: String,
