@@ -1000,7 +1000,7 @@ mod tests {
         assert!(gap < 0.05, "音频线程仍被阻塞 {gap}s —— 电音会回来");
     }
 
-/// 端到端回归：DSD(88.2k) 播完接一首 44.1k 的曲子，**不能沿用上一首的采样率**转换。
+    /// 端到端回归：DSD(88.2k) 播完接一首 44.1k 的曲子，**不能沿用上一首的采样率**转换。
     /// 症状是下一首以 2 倍速播放（用户报的「切歌后声音奇怪且加速」）。
     /// 不用音频设备：建一个混音器，把两个音源追加到同一个 Player，数混音输出多少帧。
     #[test]
@@ -1008,7 +1008,7 @@ mod tests {
         use std::num::NonZero;
         let dsd = make_dsf_at("oberon_dsd_handoff.dsf", 1000.0, 0.2, 2);
         let wav = make_wav_44k("oberon_handoff.wav", 2000.0, 0.4);
-        let (mixer, mut out) = rodio::mixer::mixer(
+        let (mixer, out) = rodio::mixer::mixer(
             NonZero::new(2).unwrap(),
             NonZero::new(48_000).unwrap(),
         );

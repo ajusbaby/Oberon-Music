@@ -9,6 +9,7 @@
 use crate::engine::backend::{self, Fallback, OutputMode};
 use crate::engine::beat::{BeatMeter, BeatTap};
 use crate::engine::exclusive::ExclusiveSink;
+use crate::engine::resample::ResamplerSource;
 use crate::error::{AppError, E_AUDIO_DEVICE, E_DECODE};
 use rodio::mixer::Mixer;
 use rodio::source::{SeekError, Source};
@@ -50,6 +51,12 @@ pub struct OutputStatus {
     pub format: Option<String>,
     /// 回退共享的原因（中文，来自 Fallback::hint）；非回退时为 None
     pub fallback: Option<String>,
+    /// 输出（mixer / 设备）的采样率，Hz；未打开时为 None
+    pub output_rate: Option<u32>,
+    /// 最近一次交给输出的音源的解码采样率，Hz；什么都没装时为 None
+    pub source_rate: Option<u32>,
+    /// 上面两者不一致时说明走了多相 sinc 重采样（设置页据此显示，不用翻控制台）
+    pub resampling: bool,
 }
 
 /// 输出设备 + 播放句柄的持有者（Player/Drop 语义：句柄释放即停止）
@@ -143,6 +150,9 @@ impl CoreAudio {
             g.opened = false;
             g.format = None;
             g.fallback = None;
+            g.output_rate = None;
+            g.source_rate = None;
+            g.resampling = false;
         }
     }
 
@@ -369,6 +379,18 @@ impl CoreAudio {
             g.backend = backend;
             g.format = format;
             g.fallback = self.last_fallback.clone();
+            g.output_rate = self.output_rate();
+        }
+    }
+
+    /// 记录「最近一次交给输出的音源」的采样率，并算出有没有发生重采样。
+    /// 供设置页显示 —— 用户不该为了确认这件事去翻控制台。
+    fn note_source(&self, src_rate: u32) {
+        let out = self.output_rate();
+        if let Ok(mut g) = self.status.lock() {
+            g.source_rate = Some(src_rate);
+            g.output_rate = out;
+            g.resampling = out.map(|o| o != src_rate).unwrap_or(false);
         }
     }
 
@@ -491,10 +513,43 @@ impl CoreAudio {
         }
     }
 
-    /// 追加解码器；顺带用 BeatTap 包裹，把采样喂给节拍检测
+    /// 当前输出链路的采样率：共享 sink 的配置率，或独占协商出来的率。
+    /// 也是「解码器必须转换到」的目标采样率。
+    ///
+    /// ⚠️ **刻意不把共享流强行固定成某个采样率**（比如 48k）。这是权衡后的决定：
+    /// - 共享模式下这个值 = 用户在 Windows 里给该设备设的「默认格式」
+    ///   （`DeviceSinkBuilder::from_device` → `default_output_config()`），我们原样跟进；
+    /// - 于是每首歌都是「曲目率 → 设备率」**一次**多相 sinc 算过去，链路里没有第二级转换；
+    /// - 如果强行开 48k，用户设成 96k/192k 时就会多出一级 Windows 音频引擎的重采样，
+    ///   而且质量不再由我们掌控；
+    /// - 代价是成本随设备率上升：release 实测立体声约 44.1k→48k 0.45% 单核、
+    ///   →96k 0.9%、→192k 1.8%（见 engine/resample.rs 的 cost_table_common_pairs）。
+    /// 独占模式不受这条影响：它按曲目率协商，协商成功时这里等于曲目率、完全不重采样。
+    fn output_rate(&self) -> Option<u32> {
+        if let Some(s) = &self.exclusive {
+            return Some(s.sample_rate());
+        }
+        self.sink.as_ref().map(|s| s.config().sample_rate().get())
+    }
+
+    /// 追加解码器；顺带用 BeatTap 包裹，把采样喂给节拍检测。
+    ///
+    /// ⚠️ 采样率必须在这里就换成**输出设备的采样率**：rodio 自带的转换器是
+    /// 「线性插值上采样 / 直接丢样本下采样」（见 engine/resample.rs 的说明），
+    /// 共享模式下 44.1k 的曲目会被它毁掉。所以只要两者不一致就套一层多相 sinc；
+    /// 一致时（独占模式按曲目率协商成功）直通，一格开销都不多花。
     pub fn player_append(&self, decoder: TrackDecoder, meter: Arc<BeatMeter>) {
-        if let Some(p) = &self.player {
-            meter.set_sample_rate(decoder.sample_rate().get());
+        let Some(p) = &self.player else { return };
+        let src_rate = decoder.sample_rate().get();
+        let dst_rate = self.output_rate().unwrap_or(src_rate);
+        // 给设置页留一份「本音源有没有被重采样」的事实
+        self.note_source(src_rate);
+        // 节拍检测看到的是重采样之后的样本，所以要按输出采样率配表
+        meter.set_sample_rate(dst_rate);
+        if src_rate != dst_rate && src_rate > 0 && dst_rate > 0 {
+            eprintln!("[engine] 重采样：{src_rate} Hz → {dst_rate} Hz（多相 sinc）");
+            p.append(BeatTap::new(ResamplerSource::new(decoder, dst_rate), meter));
+        } else {
             p.append(BeatTap::new(decoder, meter));
         }
     }
@@ -977,6 +1032,9 @@ mod tests {
             backend: Backend::Shared,
             format: None,
             fallback: Some("该设备正被其它程序独占".into()),
+            output_rate: Some(48_000),
+            source_rate: Some(44_100),
+            resampling: true,
         }));
         let mut core = CoreAudio::new(status.clone());
         core.exclusive_denied = true;
@@ -985,6 +1043,7 @@ mod tests {
         let st = core.output_status();
         assert!(!st.opened, "状态应回到「尚未打开」");
         assert!(st.fallback.is_none(), "回退原因要清掉");
+        assert!(st.output_rate.is_none() && st.source_rate.is_none() && !st.resampling, "采样率信息也要清掉");
         assert!(!core.exclusive_denied, "要重新给独占一次机会");
         assert!(core.last_fallback.is_none());
     }
