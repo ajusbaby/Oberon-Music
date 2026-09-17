@@ -152,6 +152,12 @@ export interface OutputStatus {
   format: string | null;
   /** 回退共享的原因（中文，可直接显示）；没回退时为 null */
   fallback: string | null;
+  /** 输出（mixer / 设备）的采样率 Hz；未打开时为 null */
+  outputRate: number | null;
+  /** 最近一次交给输出的音源的解码采样率 Hz；还没装载曲目时为 null */
+  sourceRate: number | null;
+  /** sourceRate 与 outputRate 不一致 = 走了多相 sinc 重采样 */
+  resampling: boolean;
 }
 
 export interface LibraryStats {

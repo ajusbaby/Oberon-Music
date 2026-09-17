@@ -491,6 +491,25 @@ export function SettingsView() {
           </div>
           <div className="settings-row">
             <div className="settings-row-main">
+              <div className="settings-label">采样率</div>
+              <div className="settings-hint">
+                {!outStatus || !outStatus.opened || !outStatus.outputRate
+                  ? "尚未打开输出"
+                  : !outStatus.sourceRate
+                    ? "输出 " + outStatus.outputRate + " Hz（尚未装载曲目）"
+                    : "解码 " +
+                      outStatus.sourceRate +
+                      " Hz → 输出 " +
+                      outStatus.outputRate +
+                      " Hz" +
+                      (outStatus.resampling
+                        ? "（多相 sinc 重采样）"
+                        : "（直通，未重采样）")}
+              </div>
+            </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-main">
               <div className="settings-label">独占能力探测</div>
               <div className="settings-hint">
                 现场问驱动：这台设备在独占模式下支持哪些采样率/位深，并真实初始化一次试试
