@@ -10,6 +10,7 @@ pub mod adts;
 pub mod audio;
 pub mod backend;
 pub mod beat;
+pub mod downmix;
 pub mod dsd;
 pub mod exclusive;
 pub mod opus;

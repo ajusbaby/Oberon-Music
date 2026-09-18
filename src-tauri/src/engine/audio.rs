@@ -8,6 +8,7 @@
 
 use crate::engine::backend::{self, Fallback, OutputMode};
 use crate::engine::beat::{BeatMeter, BeatTap};
+use crate::engine::downmix;
 use crate::engine::exclusive::ExclusiveSink;
 use crate::engine::resample::ResamplerSource;
 use crate::error::{AppError, E_AUDIO_DEVICE, E_DECODE};
@@ -533,6 +534,18 @@ impl CoreAudio {
         self.sink.as_ref().map(|s| s.config().sample_rate().get())
     }
 
+    /// 当前输出链路的声道数：共享 sink 的配置，或独占协商用的声道数。
+    /// 与 `output_rate` 一样从**活的** sink 读，不另存一份状态。
+    ///
+    /// 用途只有一个：判断「源比输出多声道 ⇒ 需要我们自己下混」。
+    /// （独占路径按设备声道数建 mixer，所以这里就是设备声道数。）
+    fn output_channels(&self) -> Option<usize> {
+        if let Some(s) = &self.exclusive {
+            return Some(s.channels() as usize);
+        }
+        self.sink.as_ref().map(|s| s.config().channel_count().get() as usize)
+    }
+
     /// 追加解码器；顺带用 BeatTap 包裹，把采样喂给节拍检测。
     ///
     /// ⚠️ 采样率必须在这里就换成**输出设备的采样率**：rodio 自带的转换器是
@@ -547,11 +560,29 @@ impl CoreAudio {
         self.note_source(src_rate);
         // 节拍检测看到的是重采样之后的样本，所以要按输出采样率配表
         meter.set_sample_rate(dst_rate);
+        // ---- 多声道 → 立体声：必须在进 mixer 之前做 ----
+        // rodio 的声道转换是「丢掉多余的声道」而不是下混（见 engine/downmix.rs 的说明），
+        // 于是 5.1 在立体声设备上只剩 FL/FR —— 中置（人声/主奏）与环绕被静默丢弃。
+        // 我们先算成 2ch，rodio 那层就退化成 2→2 的恒等变换。
+        let mut src = decoder;
+        let src_ch = src.channels().get() as usize;
+        let dst_ch = self.output_channels().unwrap_or(2);
+        if dst_ch == 2 && src_ch > 2 {
+            if downmix::coeffs_for(src_ch).is_some() {
+                eprintln!("[engine] 多声道 {src_ch}ch → 下混为 2ch（ITU-R BS.775）");
+                src = TrackDecoder::Custom(Box::new(downmix::DownmixSource::new(src, src_ch)));
+            } else {
+                eprintln!(
+                    "[engine] 多声道 {src_ch}ch 没有已知布局，交给 rodio 处理（可能只保留前 2 个声道）"
+                );
+            }
+        }
+
         if src_rate != dst_rate && src_rate > 0 && dst_rate > 0 {
             eprintln!("[engine] 重采样：{src_rate} Hz → {dst_rate} Hz（多相 sinc）");
-            p.append(BeatTap::new(ResamplerSource::new(decoder, dst_rate), meter));
+            p.append(BeatTap::new(ResamplerSource::new(src, dst_rate), meter));
         } else {
-            p.append(BeatTap::new(decoder, meter));
+            p.append(BeatTap::new(src, meter));
         }
     }
 }
