@@ -1,8 +1,16 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
+// 应用版本号：构建时注入成字面量 __APP_VERSION__，供开屏的「每个版本只放一次」判断。
+// （不在运行时读 package.json —— 那会把整个 package.json 打进产物。）
+const pkgVersion: string = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
+).version;
+
 // Oberon — 前端构建配置（Tauri 2 + React + TS）
 export default defineConfig(async () => ({
+  define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
   plugins: [react()],
   clearScreen: false,
   server: {

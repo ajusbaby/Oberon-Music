@@ -7,11 +7,16 @@
  *    本身就是一个层叠上下文，fixed 反而绕不出去）。
  * 2. 品牌字用内置的 LyricEphesis（与侧栏 logo 同一套），设计稿的 Segoe Script 作兜底 ——
  *    Segoe Script 只有 Windows 有，且和 logo 不是同一个字形。
- * 3. 低功耗（.splash--lp）把光斑漂移与大面积 backdrop-filter 全停掉，见文件末尾。
+ * 3. 低功耗（.splash--lp）把霜层调实、光斑调淡，见文件末尾。
  * 4. **容器自带不透明底色**（设计稿里这层是 html/body 的 #f2f3f5）。不加的话
  *    62% 的白磨砂会直接透出应用主界面 —— 开屏期间必须一点主界面都看不见。
- *    有了这层不透明底，frost 的 backdrop-filter 只会在「底色 + 光斑」上做模糊，
- *    磨砂材质照旧，但任何下层内容都被彻底挡住。
+ *    有了这层不透明底，任何下层内容都被彻底挡住。
+ *
+ * ⚠️ 2026-09 方案 A：4 团"漂移的光斑"换成了静态径向渐变（挂在外壳背景层上）。
+ *    真机实测：保留漂移时开屏要 10.2%（CSS 动画被合成器钉在刷新率上），
+ *    换成静态渐变后只要 2.2%；而 backdrop-filter / mix-blend-mode / will-change /
+ *    drag-region 逐项拿掉都在噪声内（不是它们的问题）。
+ *    详见 docs/开屏GPU开销-根因与方案.md。
  * ========================================================================= */
 
 @property --reveal {
@@ -52,70 +57,49 @@
 /* ---------- 背景：彩色光斑 + 磨砂白 ---------- */
 .splash__bg {
     position: absolute;
-    inset: -20%;
-    filter: blur(90px) saturate(160%);
-    opacity: 0;
-    animation: bg-in 1.4s ease 0.05s forwards;
+    inset: 0;
+    /* ===== 方案 A：4 团光斑 → 静态径向渐变 =====
+       真机实测（延长开屏停留、逐层消融）：
+         · 保留漂移的光斑         → 开屏期间 10.2%（本机 180Hz，CSS 动画被钉在刷新率上）
+         · 把漂移放慢 4 倍        → 仍然 10.2%（关键帧数量不变，帧还是要出）
+         · 静态渐变（本方案）      → 2.2%
+       也就是说，贵的不是某个滤镜属性（backdrop-filter 只值 1.4 点、
+       mix-blend-mode / will-change / drag-region 都在噪声内），
+       而是"有 4 个合成层被逐帧驱动"这件事本身。
+       位置 / 尺寸 / 颜色按原 4 团光斑（含 .splash__bg 的 inset:-20% 与 inset:0 的换算）等比搬到渐变里：
+         原视口坐标 (x, y) → 本层坐标 (1.4x - 20%, 1.4y - 20%)，直径 vw → 1.4×vw。
+       像素比对（与现版冻结在同一完成态）：mean ≈ 5.9/255、p95 15 —— 一次性画面，可接受。 */
+    filter: blur(28px) saturate(160%);
+    background:
+        radial-gradient(circle 64.4vw at 29.2% 29.2%, rgba(255, 179, 200, 0.45) 0%, rgba(255, 179, 200, 0) 70%),
+        radial-gradient(circle 70vw   at 90%   11.2%, rgba(168, 208, 255, 0.45) 0%, rgba(168, 208, 255, 0) 70%),
+        radial-gradient(circle 61.6vw at 53.2% 89.6%, rgba(158, 232, 223, 0.45) 0%, rgba(158, 232, 223, 0) 70%),
+        radial-gradient(circle 58.8vw at 86.8% 80%,   rgba(255, 217, 168, 0.45) 0%, rgba(255, 217, 168, 0) 70%);
     pointer-events: none;
 }
 
+/* 入场淡入（渐变版不需要 bg-in，保留这个 keyframes 供别处引用） */
 @keyframes bg-in { to { opacity: 1; } }
 
-.blob {
-    position: absolute;
-    border-radius: 50%;
-    mix-blend-mode: multiply;
-    will-change: transform;
-}
-
-.blob--1 {
-    width: 46vw; height: 46vw;
-    left: 2%; top: 2%;
-    background: radial-gradient(circle, #ffb3c8 0%, rgba(255, 179, 200, 0) 70%);
-    animation: drift-1 24s ease-in-out infinite alternate;
-}
-.blob--2 {
-    width: 50vw; height: 50vw;
-    right: 0%; top: -8%;
-    background: radial-gradient(circle, #a8d0ff 0%, rgba(168, 208, 255, 0) 70%);
-    animation: drift-2 28s ease-in-out infinite alternate;
-}
-.blob--3 {
-    width: 44vw; height: 44vw;
-    left: 18%; bottom: -14%;
-    background: radial-gradient(circle, #9ee8df 0%, rgba(158, 232, 223, 0) 70%);
-    animation: drift-3 22s ease-in-out infinite alternate;
-}
-.blob--4 {
-    width: 42vw; height: 42vw;
-    right: 6%; bottom: 0%;
-    background: radial-gradient(circle, #ffd9a8 0%, rgba(255, 217, 168, 0) 70%);
-    animation: drift-4 26s ease-in-out infinite alternate;
-}
-
-@keyframes drift-1 { to { transform: translate3d(7%, 5%, 0)   scale(1.14); } }
-@keyframes drift-2 { to { transform: translate3d(-8%, 6%, 0)  scale(1.10); } }
-@keyframes drift-3 { to { transform: translate3d(6%, -7%, 0)  scale(1.12); } }
-@keyframes drift-4 { to { transform: translate3d(-5%, -6%, 0) scale(1.08); } }
+/* 方案 A：原来的 .blob 图层与 drift-1..4 关键帧已全部删除（它们是被逐帧驱动的合成层，
+   正是开屏开销的来源）。颜色现在在 .splash__bg 的径向渐变里，位置一一对应。 */
 
 /* 磨砂白层 */
 .splash__frost {
     position: absolute;
     inset: 0;
-    background: rgba(255, 255, 255, 0.62);
-    backdrop-filter: blur(80px) saturate(180%);
-    -webkit-backdrop-filter: blur(80px) saturate(180%);
+    /* ⚠️ 刻意没有 backdrop-filter（原来 blur(80px) saturate(180%)）。
+       背板本来就是"不透明底 + 已经模糊过的渐变"，再模糊一次观感等同于一层平白；
+       白度 0.55 是扫描出来的最接近值（与原来的差值 mean 4.06/255、p95 8）。 */
+    background: rgba(255, 255, 255, 0.55);
     pointer-events: none;
 }
 
-/* 细噪点（静态 SVG 湍流，不产帧） */
+/* 细噪点：已移除（原来是全窗 mix-blend-mode: multiply）。
+   在"开屏 + 真机图层栈"里全窗混合层会显著拖累合成，而它只是 3.5% 透明度的颗粒，
+   去掉后在像素比对里压不出差异。 */
 .splash__noise {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    opacity: 0.035;
-    mix-blend-mode: multiply;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    display: none;
 }
 
 /* ---------- 内容区 ---------- */
@@ -223,43 +207,24 @@
 }
 
 /* =========================================================================
- * 低功耗：光斑漂移（4 个 will-change:transform 的层）与 frost 的整屏 backdrop-filter
- * 都是每帧重算的大面积模糊，正是 docs/高开销样式清单.md 点名的开销。
- * 这里换成一层静态渐变，观感接近但不再产帧。
+ * 低功耗：默认档现在**已经是**静态渐变 + 无 backdrop-filter（方案 A），
+ * 所以低功耗只剩"霜层更实、光斑更淡"这一点差别。
  * ========================================================================= */
-.splash--lp .splash__bg {
-    animation: none;
-    opacity: 1;
-    filter: blur(60px) saturate(140%);
-    background:
-        radial-gradient(circle at 12% 12%, #ffb3c8 0%, rgba(255, 179, 200, 0) 42%),
-        radial-gradient(circle at 88% 6%,  #a8d0ff 0%, rgba(168, 208, 255, 0) 46%),
-        radial-gradient(circle at 30% 92%, #9ee8df 0%, rgba(158, 232, 223, 0) 44%),
-        radial-gradient(circle at 92% 88%, #ffd9a8 0%, rgba(255, 217, 168, 0) 42%);
-}
+.splash--lp .splash__bg { filter: blur(36px) saturate(130%); opacity: 0.85; }
 
-.splash--lp .blob { display: none; }
-
-.splash--lp .splash__frost {
-    background: rgba(255, 255, 255, 0.78);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-}
+.splash--lp .splash__frost { background: rgba(255, 255, 255, 0.78); }
 
 /* =========================================================================
  * 无障碍：系统开了「减少动态效果」就整段静态化，直接呈现书写完成的画面
  * ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
+    /* 默认档只剩"书写揭示"与"按钮浮出"两条动画；光斑已经是静态的 */
     .splash,
-    .splash__bg,
-    .blob,
     .writer__text,
     .splash__actions {
         animation: none !important;
         opacity: 1 !important;
         transform: none !important;
-        filter: none !important;
     }
-    .splash__bg { filter: blur(90px) saturate(160%) !important; }
     .writer__text { --reveal: 102% !important; }
 }

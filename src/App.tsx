@@ -7,7 +7,7 @@ import { PlayerBar } from "./components/PlayerBar";
 import { DialogLayer } from "./components/DialogLayer";
 import { LyricsPage } from "./components/LyricsPage";
 import { HomeAmbient } from "./components/HomeAmbient";
-import { SplashScreen, hasSeenSplash, SPLASH_REPLAY_EVENT } from "./components/SplashScreen";
+import { SplashScreen, shouldShowSplash } from "./components/SplashScreen";
 import { HomeView } from "./views/HomeView";
 import { LibraryView } from "./views/LibraryView";
 import { FavoritesView } from "./views/FavoritesView";
@@ -116,10 +116,9 @@ export default function App() {
   const [maximized, setMaximized] = useState(false);
   const lyricsOpen = useUiStore((s) => s.lyricsOpen);
 
-  // 开屏：首次运行停在开屏页等用户点「开始使用」，之后启动由 SplashScreen 自己进入。
+  // 开屏：**只在「安装后第一次启动」和「版本更新后第一次启动」出现**，用户点「开始使用」才进入。
   // 开屏期间 App 照常初始化（设置 / 曲库 / 播放器事件），那几秒正好用来盖住加载。
-  const [splashOpen, setSplashOpen] = useState(true);
-  const [splashWaitForUser, setSplashWaitForUser] = useState(() => !hasSeenSplash());
+  const [splashOpen, setSplashOpen] = useState(() => shouldShowSplash());
 
   /**
    * 窗口是否聚焦。失焦时把所有「装饰性无限动画」暂停（见 views.css 的 win-blur 规则）
@@ -179,16 +178,6 @@ export default function App() {
     void playerEvents.onError((payload) => {
       toast(payload.message || payload.code, "error");
     });
-  }, []);
-
-  // 设置页「重放」：重新挂载开屏，并且这一次按「首次运行」对待（露出按钮）
-  useEffect(() => {
-    const onReplay = () => {
-      setSplashWaitForUser(true);
-      setSplashOpen(true);
-    };
-    window.addEventListener(SPLASH_REPLAY_EVENT, onReplay);
-    return () => window.removeEventListener(SPLASH_REPLAY_EVENT, onReplay);
   }, []);
 
   // 窗口最大化状态 → 外壳取消圆角；顺带在拖拽期间给 <html> 挂 .resizing
@@ -303,11 +292,7 @@ export default function App() {
       <Toasts />
       {/* 开屏挂在外壳内部：这样自动被外壳的圆角 + overflow:hidden 裁成窗口形状 */}
       {splashOpen && (
-        <SplashScreen
-          waitForUser={splashWaitForUser}
-          lowPower={lowPower}
-          onDone={() => setSplashOpen(false)}
-        />
+        <SplashScreen lowPower={lowPower} onDone={() => setSplashOpen(false)} />
       )}
     </div>
   );

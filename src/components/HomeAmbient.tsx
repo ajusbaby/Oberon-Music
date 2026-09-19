@@ -452,6 +452,10 @@ export function HomeAmbient({ active, playing, paused, seed, trackId }: Props) {
       raf = requestAnimationFrame(draw);
     };
 
+    // 光雾帧率维持 30fps（下面那道 33ms 闸）。真机实测：30 → 20fps 基本无收益
+    // （2.01% → 1.98%），15fps 才再省 ~12%，不值得动观感。首页光雾真正的大头是
+    // canvas 上那层静态滤镜，已经去掉，见 styles/views.css 的 .home-ambient canvas。
+
     const renderOnce = () => {
       const st = stateRef.current;
       st.colors = st.targets.map((c) => [...c] as RGB);   // 静态帧直接用目标色板（5 色）

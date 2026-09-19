@@ -20,7 +20,6 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { useUiStore, toast } from "../stores/uiStore";
 import { pickAndAddMusicFolder } from "../lib/addMusic";
-import { replaySplash } from "../components/SplashScreen";
 import {
   BUILTIN_FONTS,
   DEFAULT_SIZE,
@@ -942,17 +941,6 @@ export function SettingsView() {
 
         <div className="section-title">数据与关于</div>
         <div className="settings-block">
-          <div className="settings-row">
-            <div className="settings-row-main">
-              <div className="settings-label">开屏动画</div>
-              <div className="settings-hint">
-                首次启动会停在开屏页点「开始使用」；之后启动由它自己进入（约 4 秒）
-              </div>
-            </div>
-            <button className="pill-btn" onClick={() => replaySplash()}>
-              重放
-            </button>
-          </div>
           <div className="settings-row">
             <div className="settings-row-main">
               <div className="settings-label">数据库</div>
