@@ -14,6 +14,10 @@
   plain repo-scoped token does not have.
 
   Keep this file ASCII-only (see the note in release.ps1).
+  This is not cosmetic: Windows PowerShell 5.1 reads BOM-less .ps1 as ANSI (GBK on zh-CN).
+  A Chinese comment here once swallowed the NEXT line (the mangled lead byte ate the
+  newline), so "git tag" silently never ran and the publish aborted with
+  "src refspec v<x.y.z> does not match any". Verified 2026-09-20 - keep it ASCII.
 
   Usage:
     npm run publish
@@ -24,6 +28,8 @@
 # against $LASTEXITCODE instead.
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
+# git commands below must run in the repo root, not in whatever cwd npm was invoked from
+Set-Location $root
 
 # --- locate gh ---
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
@@ -74,8 +80,11 @@ Write-Host "[publish] version=$version tag=$tag" -ForegroundColor Cyan
 & $gh api "repos/$repo/git/ref/tags/$tag" *> $null
 if ($LASTEXITCODE -ne 0) {
   Write-Host "[publish] tag $tag is not on the remote yet; creating and pushing it..." -ForegroundColor Yellow
-  # 本地没有就建（已存在时 git tag 会报错，无害）
-  git tag -a $tag -m "Oberon $version" 2>$null
+  # Create the tag locally when it is missing. An existing tag makes "git tag" fail, which is
+  # harmless, but any other failure must be loud: without a local tag the push below dies with
+  # the confusing "src refspec does not match any".
+  git tag -a $tag -m "Oberon $version"
+  if (-not (git tag -l $tag)) { Write-Host "[publish] failed to create local tag $tag" -ForegroundColor Red; exit 1 }
   git push origin $tag
   if ($LASTEXITCODE -ne 0) { Write-Host "[publish] failed to push tag $tag" -ForegroundColor Red; exit 1 }
 }
@@ -83,8 +92,8 @@ if ($LASTEXITCODE -ne 0) {
 $files = @($exe.FullName, $sigPath, $jsonPath)
 
 # --- create the release, or refresh its assets if it already exists ---
-# 手写简介优先（scripts/release-notes.md）：里面会列出支持的格式。
-# 这里做一次兜底 —— 某些调用方式下 $PSScriptRoot 可能取不到，退回按当前目录找。
+# A hand-written blurb wins (scripts/release-notes.md): it lists the supported formats.
+# Fallback: under some invocation styles $PSScriptRoot is empty, so try the current directory.
 $notesFile = Join-Path $PSScriptRoot 'release-notes.md'
 if (-not $notesFile -or -not (Test-Path $notesFile)) {
   $alt = Join-Path (Get-Location) 'scripts/release-notes.md'
@@ -97,7 +106,7 @@ if ($haveNotes) { Write-Host "[publish] release notes: $notesFile" }
 if ($LASTEXITCODE -eq 0) {
   Write-Host "[publish] release $tag exists - uploading assets with --clobber" -ForegroundColor Yellow
   & $gh release upload $tag @files --clobber --repo $repo
-  # 同名重发时简介也要一起刷新，否则会出现「包换了、简介还是旧的」
+  # Refreshing the notes matters too, otherwise a re-release keeps the old blurb.
   if ($haveNotes) { & $gh release edit $tag --repo $repo --notes-file $notesFile }
 } else {
   Write-Host "[publish] creating release $tag" -ForegroundColor Green
