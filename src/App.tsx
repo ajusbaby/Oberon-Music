@@ -27,7 +27,6 @@ import { playerEvents } from "./api/events";
 import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "./lib/lowPower";
 import { setWinFocused, setWinHidden as publishWinHidden } from "./lib/winFocus";
 import { playerPause, playerRestore } from "./api/ipc";
-import { loadCoverage } from "./lib/lyricFont";
 
 const appWindow = getCurrentWindow();
 
@@ -186,18 +185,6 @@ export default function App() {
     void useLibraryStore.getState().refreshStats();
     void useLibraryStore.getState().refreshFolders();
     void usePlayerStore.getState().refresh();
-
-    // 预热「字体覆盖检查」（读字体文件 + 解析 cmap）：这是首次进设置页最重的一次性开销，
-    // 挪到启动后的空闲时间做 —— 用户点进设置页时就不用等这一下。
-    // 应用是常驻根组件、不会卸载，所以不额外做取消。
-    const warmCoverage = () => {
-      void loadCoverage(useSettingsStore.getState().values);
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      window.requestIdleCallback(warmCoverage, { timeout: 4000 });
-    } else {
-      window.setTimeout(warmCoverage, 2500);
-    }
 
     void initPlayerEvents();
     void initLibraryEvents();

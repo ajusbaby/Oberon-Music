@@ -1572,7 +1572,7 @@
     fill: currentColor;
 }
 
-/* ===== 设置：歌词字体（紧凑两槽位）===== */
+/* ===== 设置：歌词排版（字号 / 语言匹配 / 粗细）===== */
 .lf-row {
     display: flex;
     align-items: center;
@@ -1581,13 +1581,8 @@
     border-bottom: 1px solid var(--color-divider);
 }
 
-.lf-row:last-child,
-.lf-row-head {
+.lf-row:last-child {
     border-bottom: 0;
-}
-
-.lf-row-head {
-    padding-bottom: 8px;
 }
 
 .lf-label {
@@ -1601,31 +1596,6 @@
     color: var(--color-text-tertiary);
 }
 
-/* 歌词字体块的块尾操作行：左侧状态文案、右侧保存按钮。
-   原来这一行夹在「粗细」和「预览」中间，左边还是个空标签 —— 在设置项网格里
-   看着像漏填了一项设置。挪到块尾、加一条分隔线，才是「这个块的操作」该在的位置。 */
-.lf-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-top: 16px;
-    padding-top: 14px;
-    border-top: 1px solid var(--color-divider);
-}
-
-.lf-footer .lf-hint {
-    min-width: 0;
-}
-
-/* 沿用 .pill-btn 的观感，但比它紧凑一档：这是设置块内的动作，不该有主操作的体量 */
-.lf-save {
-    height: 34px;
-    padding: 0 16px;
-    font-size: 13px;
-    flex-shrink: 0;
-}
-
 .lf-options {
     flex: 1;
     min-width: 0;
@@ -1635,28 +1605,7 @@
     gap: 6px;
 }
 
-/* 每个语言槽一个下拉。语言从 2 个变成 4 个之后，chip 网格会挤爆，
-   而下拉的候选天然可以很长（内置 + 全部上传字体）。 */
-.lf-select {
-    flex: 0 0 auto;
-    min-width: 186px;
-    max-width: 268px;
-    height: 30px;
-    padding: 0 8px;
-    border-radius: 9px;
-    border: 1px solid var(--color-border);
-    background: var(--color-surface-secondary);
-    color: var(--color-text-primary);
-    font-family: inherit;
-    font-size: 12.5px;
-    cursor: pointer;
-}
-
-.lf-select:hover {
-    background: var(--color-active);
-}
-
-/* 设置页里的通用下拉（输出设备等）。外观与 .lf-select 一致，但名字不绑定歌词字体 ——
+/* 设置页里的通用下拉（输出设备等）。名字不绑定歌词字体 ——
    免得以后有人以为它是歌词专用的。 */
 .settings-select {
     flex: 0 0 auto;
@@ -1677,31 +1626,6 @@
     background: var(--color-active);
 }
 
-/* 语言槽的样字：用该槽真实的字体栈渲染（见 SettingsView），所以它同时是一份"所见即所得"的检验 */
-.lf-slot-sample {
-    flex: 1;
-    min-width: 0;
-    margin-left: 4px;
-    font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* 样张体检结论（读字体 cmap 得出的硬数据）：
-   缺字时把"缺几个"摆在选择旁边，避免选完才发现一行里两种字体。 */
-.lf-cover {
-    flex: 0 0 auto;
-    font-size: 11.5px;
-    color: var(--color-text-tertiary);
-    font-variant-numeric: tabular-nums;
-    white-space: nowrap;
-}
-
-.lf-cover.bad {
-    color: #b45309;
-}
-
 .lf-chip {
     height: 28px;
     padding: 0 11px;
@@ -1709,12 +1633,6 @@
     align-items: center;
     gap: 6px;
     font-size: 12.5px;
-}
-
-.lf-sample {
-    font-size: 14px;
-    line-height: 1;
-    opacity: 0.9;
 }
 
 .lf-range {
@@ -1760,32 +1678,6 @@
 .lf-icon-btn:disabled {
     opacity: 0.35;
     cursor: default;
-}
-
-.lf-preview-block {
-    padding-top: 12px;
-}
-
-/* 歌词预览：直接吃歌词页那三个 CSS 变量 */
-.lf-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 16px 18px;
-    border-radius: 16px;
-    background: linear-gradient(135deg, #2b3037, #16181c 70%);
-    border: 1px solid var(--color-border);
-    overflow: hidden;
-}
-
-.lp-line {
-    margin: 0;
-    font-family: var(--lyric-font, inherit);
-    font-size: calc(19px * var(--lyric-size, 1));
-    font-weight: var(--lyric-weight, 420);
-    font-synthesis: weight;
-    color: rgba(255, 255, 255, 0.42);
-    line-height: 1.35;
 }
 
 .lp-active {
@@ -2368,17 +2260,6 @@
    停止绘制）。实测副作用：**从歌词页返回时主界面会先闪一下纯白** —— 隐藏期间合成器丢掉了它的
    绘制结果，重新可见时要重画一帧。低功耗模式下主界面本来是静止的（光雾已关、光晕/波形已停），
    静态内容的绘制成本≈0，所以整条规则删掉，用体验换那一点点收益不划算。 */
-
-/* 槽位行里的删除按钮：与上传按钮同款，仅用红色区分意图；不可删时置灰 */
-.lf-icon-btn.lf-del:hover:not(:disabled) {
-    color: #e06c6c;
-    border-color: rgba(224, 108, 108, 0.5);
-}
-
-.lf-icon-btn:disabled {
-    opacity: 0.35;
-    cursor: default;
-}
 
 /* ===== 渲染异常兜底（src/components/ErrorBoundary.tsx）=====
    样式故意做得「安静」：出故障时用户最先要的是能读到发生了什么 + 一个明确的出口，

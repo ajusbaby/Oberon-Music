@@ -1,5 +1,5 @@
 // 设置：曲库统计 / 音乐文件夹 / 播放默认值 / 数据与关于
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -12,7 +12,6 @@ import {
   audioRetryOutput,
   audioSetOutputDevice,
   audioSetOutputMode,
-  fontDelete,
 } from "../api/ipc";
 import { Icon } from "../components/Icon";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -21,55 +20,17 @@ import { usePlayerStore } from "../stores/playerStore";
 import { useUiStore, toast } from "../stores/uiStore";
 import { pickAndAddMusicFolder } from "../lib/addMusic";
 import {
-  BUILTIN_FONTS,
   DEFAULT_SIZE,
   DEFAULT_WEIGHT,
-  GLYPH_POLICY_KEY,
+  MATCH_POLICY_KEY,
   SIZE_RANGE,
-  SLOTS,
-  SYSTEM_FONT,
   WEIGHT_OPTIONS,
-  customFamily,
-  fileId,
-  listFontFiles,
-  loadCoverage,
-  lyricFontStacks,
-  readGlyphPolicy,
+  readMatchPolicy,
   readSize,
-  readSlotFonts,
   readWeight,
-  sampleCoverage,
-  setFontSetting,
-  slotKey,
-  uploadFont,
 } from "../lib/lyricFont";
-import type { Coverage } from "../lib/fontCoverage";
-import type { FontChoice, FontSlot } from "../lib/lyricFont";
 import { LP_THEME_KEY, LP_THEME_OPTIONS, readLpTheme, useSystemDark } from "../lib/lowPower";
-import type { CSSProperties } from "react";
 
-/** 样张体检小标：这个字体能不能渲染本槽的样字 */
-function CoverHint({
-  slot,
-  id,
-  coverage,
-}: {
-  slot: FontSlot;
-  id: string;
-  coverage: Record<string, Coverage | null>;
-}) {
-  if (!id || id === SYSTEM_FONT) return null;
-  const cov = coverage[id];
-  if (cov === undefined) return null;
-  const s = sampleCoverage(slot, cov);
-  if (!s) return <span className="lf-cover">覆盖未检测</span>;
-  if (s.missing.length === 0) return <span className="lf-cover ok">样字全覆盖</span>;
-  return (
-    <span className="lf-cover bad" title={"缺字：" + s.missing.join(" ")}>
-      缺 {s.missing.length}/{s.total}：{s.missing.slice(0, 6).join("")}
-    </span>
-  );
-}
 
 /** 歌词字号预设：值就是 --lyric-size 的倍数（1 = 设计稿的 24px） */
 const SIZE_PRESETS: { label: string; value: number }[] = [
@@ -113,7 +74,6 @@ export function SettingsView() {
   const openDialog = useUiStore((s) => s.openDialog);
 
   const [busy, setBusy] = useState(false);
-  const [fontBusy, setFontBusy] = useState(false);
 
   // 输出设备：空串 = 跟随系统默认设备。指定某台设备后，它在场时只用它；
   // 它不在场时不会改用系统默认（见引擎 try_recover_device 里的 allow_fallback）。
@@ -277,117 +237,19 @@ export function SettingsView() {
     }
   }, []);
 
-  // 歌词字体：按语言分槽（西文 / 中文 / 日文 / 韩文），一个语言一个字体。
-  // 上传的字体**不做语言检测** —— 它在每一个槽的候选里都出现，由用户决定给哪个语言用。
-  const lyricFonts = readSlotFonts(settings);
+  // 歌词排版：字号 / 字重 / 纯汉字行的语言归属。
+  // 字体本身不再可配置 —— 固定走系统字体（原因见 src/lib/lyricFont.ts 头部注释）。
   const lyricSize = readSize(settings);
   const lyricWeight = readWeight(settings);
-  // 预览用的字体栈（设置页没有"整首歌"的概念，主语言传 null：每行只按自己的槽取）
-  const fontStacks = lyricFontStacks(settings, null);
-  // 缺字策略 + 各槽字体的覆盖表（样张体检：这个字体到底认不认得这些字）
-  const glyphPolicy = readGlyphPolicy(settings);
-  const [coverage, setCoverage] = useState<Record<string, Coverage | null>>({});
-  useEffect(() => {
-    let alive = true;
-    void loadCoverage(settings).then((m) => {
-      if (alive) setCoverage(m);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [settings]);
-  const [fontFiles, setFontFiles] = useState<string[]>([]);
-  // 自动保存状态：每次改动立即写库（settingsStore.set → settings_set），并给出可见反馈
-  const [fontSave, setFontSave] = useState<"idle" | "saving" | "saved">("idle");
-  const fontInputRef = useRef<HTMLInputElement | null>(null);
-  const fontSlotRef = useRef<FontSlot>("latin");
+  // 纯汉字行怎么归属：一致性优先（默认，一律按中文）/ 准确优先（跟随歌曲主语言）
+  const matchPolicy = readMatchPolicy(settings);
 
-  useEffect(() => {
-    void listFontFiles().then(setFontFiles);
-  }, [fontBusy]);
-
-  /** 该槽当前选中的字体若是上传的，返回其文件名；内置字体 / 跟随主语言都返回 null（不可删） */
-  const delTarget = (slot: FontSlot): string | null => {
-    const id = lyricFonts[slot] ?? "";
-    return fontFiles.find((f) => fileId(f) === id) ?? null;
-  };
-
-  /** 删除某个槽正在使用的自定义字体（同一语言上传多个时只删这一个，槽位回到「跟随歌曲主语言」） */
-  const deleteSlotFont = async (slot: FontSlot) => {
-    const file = delTarget(slot);
-    if (file) await deleteFontFile(file);
-  };
-  /** 删除一个上传字体：先清掉引用它的槽位（否则槽位会指向不存在的字体），再删文件并刷新列表 */
-  const deleteFontFile = async (file: string) => {
-    setFontBusy(true);
-    try {
-      const id = fileId(file);
-      for (const sl of SLOTS) {
-        if ((lyricFonts[sl.id] ?? "") === id) await setFontSetting(slotKey(sl.id), "");
-      }
-      await fontDelete(file);
-      setFontFiles(await listFontFiles());
-    } finally {
-      setFontBusy(false);
-    }
-  };
-  /** 每个语言槽共用的候选：内置字体 + 全部上传字体（不做语言检测过滤，由用户决定给谁用） */
-  const fontChoices: FontChoice[] = [
-    ...BUILTIN_FONTS,
-    ...fontFiles.map((f) => ({
-      id: fileId(f),
-      label: f.replace(/\.[^.]+$/, ""),
-      family: '"' + customFamily(f) + '"',
-      desc: "上传的字体 · " + f,
-    })),
-  ];
-
-  /** 写字体设置：立即落库（重启后仍在）并显示保存状态 */
+  /** 写排版设置：立即落库（settingsStore.set → settings_set）。滑杆拖动时逐格写入，所以不弹提示 */
   const persistFont = async (key: string, value: string) => {
-    setFontSave("saving");
     try {
-      await setFontSetting(key, value);
-      setFontSave("saved");
+      await setSetting(key, value);
     } catch (e) {
-      setFontSave("idle");
       toast("保存失败：" + String(e), "error");
-    }
-  };
-
-  /** 手动保存：把当前设置再写一遍（自动保存已生效，这里给一个明确的落库动作） */
-  const saveAllFonts = async () => {
-    setFontSave("saving");
-    try {
-      for (const s of SLOTS) await setFontSetting(slotKey(s.id), lyricFonts[s.id]);
-      await setFontSetting("lyricFontSize", String(lyricSize));
-      await setFontSetting("lyricFontWeight", String(lyricWeight));
-      setFontSave("saved");
-      toast("字体设置已保存，重启后仍然生效", "success");
-    } catch (e) {
-      setFontSave("idle");
-      toast("保存失败：" + String(e), "error");
-    }
-  };
-
-  const pickFontFile = (slot: FontSlot) => {
-    fontSlotRef.current = slot;
-    fontInputRef.current?.click();
-  };
-
-  const onPickFontFile = async (file: File | undefined) => {
-    if (!file) return;
-    const slot = fontSlotRef.current;
-    setFontBusy(true);
-    try {
-      const name = await uploadFont(file);
-      await persistFont(slotKey(slot), fileId(name));
-      setFontFiles(await listFontFiles());
-      toast("已应用字体：" + name, "success");
-    } catch (e) {
-      toast("字体导入失败：" + String(e), "error");
-    } finally {
-      setFontBusy(false);
-      if (fontInputRef.current) fontInputRef.current.value = "";
     }
   };
 
@@ -761,15 +623,8 @@ export function SettingsView() {
 
         </div>
 
-        <input
-          ref={fontInputRef}
-          type="file"
-          accept=".ttf,.otf,.ttc,.woff,.woff2"
-          style={{ display: "none" }}
-          onChange={(e) => void onPickFontFile(e.target.files?.[0])}
-        />
 
-        <div className="section-title">歌词</div>
+        <div className="section-title">歌词排版</div>
         <div className="settings-block">
           <div className="lf-row">
             <div className="lf-label">大小</div>
@@ -808,93 +663,26 @@ export function SettingsView() {
               <span className="lf-hint">歌词页字号 = 24px × 这个倍数（{Math.round(lyricSize * 100)}%）</span>
             </div>
           </div>
-        </div>
-
-        <div className="section-title">歌词字体</div>
-        {/* 每个语言槽的字体栈变量设在这一层：下面的行内样字与预览块都直接引用 var(--lf-<slot>) */}
-        <div
-          className="settings-block"
-          style={
-            {
-              "--lyric-font": fontStacks.primary,
-              "--lf-latin": fontStacks.bySlot.latin,
-              "--lf-zh": fontStacks.bySlot.zh,
-              "--lf-ja": fontStacks.bySlot.ja,
-              "--lf-ko": fontStacks.bySlot.ko,
-              "--lyric-size": String(lyricSize),
-              "--lyric-weight": String(lyricWeight),
-            } as CSSProperties
-          }
-        >
-          {SLOTS.map((s) => (
-            <div className="lf-row" key={s.id}>
-              <div className="lf-label">{s.label}</div>
-              <select
-                className="lf-select"
-                title={s.hint}
-                value={lyricFonts[s.id]}
-                onChange={(e) => void persistFont(slotKey(s.id), e.target.value)}
-              >
-                <option value="">跟随歌曲主语言</option>
-                {fontChoices.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-              {/* 就地样字直接用**这个槽真实的字体栈**：选了一个没有该语言字形的字体，
-                  这里会当场落到系统正体，而不是等你打开歌词页才发现（"选了却看不见结果"） */}
-              <span
-                className="lf-sample lf-slot-sample"
-                lang={s.lang}
-                style={{ fontFamily: "var(--lf-" + s.id + ")" }}
-              >
-                {s.sample}
-              </span>
-              {/* 样张体检：拿着字体文件的 cmap 数一遍——放错字体（比如日文字体放进中文栏）
-                  在这里就能看到"缺了几个字"，而不是等去歌词页发现一行里两种字体 */}
-              <CoverHint slot={s.id} id={lyricFonts[s.id]} coverage={coverage} />
-              <button
-                className="lf-icon-btn"
-                title={"上传" + s.label + "字体"}
-                onClick={() => pickFontFile(s.id)}
-              >
-                <Icon name="plus" />
-              </button>
-                {/* 删除**这个槽正在使用**的自定义字体：同一语言上传了多个时，只删这一个 */}
-                <button
-                  type="button"
-                  className="lf-icon-btn lf-del"
-                  title={delTarget(s.id) ? "删除该槽正在使用的字体：" + delTarget(s.id) : "该槽未使用自定义字体"}
-                  disabled={!delTarget(s.id)}
-                  onClick={() => void deleteSlotFont(s.id)}
-                >
-                  <Icon name="trash" />
-                </button>
-            </div>
-          ))}
-
           <div className="lf-row">
-            <div className="lf-label">缺字时</div>
+            <div className="lf-label">语言匹配</div>
             <div className="lf-options">
-              {(["fallback", "line"] as const).map((p) => (
+              {(["consistent", "accurate"] as const).map((p) => (
                 <button
                   key={p}
-                  className={"chip lf-chip" + (glyphPolicy === p ? " active" : "")}
+                  className={"chip lf-chip" + (matchPolicy === p ? " active" : "")}
                   title={
-                    p === "fallback"
-                      ? "缺的字用系统正体补上：尽量每个字都用你选的字体，代价是一行里可能出现两种字体"
-                      : "只要这一行有缺字，整行都改用系统正体：一行只有一个声音，代价是这一行用不上你选的字体"
+                    p === "consistent"
+                      ? "纯汉字行一律按中文字体渲染：一行只有一个声音（日文歌的汉字会略偏中文字形）"
+                      : "纯汉字行跟随整首歌的语言：日文字形更准，但夹了外语句的中文歌会整首换字体"
                   }
-                  onClick={() => void persistFont(GLYPH_POLICY_KEY, p)}
+                  onClick={() => void persistFont(MATCH_POLICY_KEY, p)}
                 >
-                  {p === "fallback" ? "逐字替换" : "整行回退"}
+                  {p === "consistent" ? "一致性优先" : "准确优先"}
                 </button>
               ))}
-              <span className="lf-hint">字体缺字时怎么处理（覆盖未检测的字体不受影响）</span>
+              <span className="lf-hint">纯汉字歌词行（没有假名 / 谚文可判）按哪种语言挑字体</span>
             </div>
           </div>
-
           <div className="lf-row">
             <div className="lf-label">粗细</div>
             <div className="lf-options">
@@ -905,9 +693,7 @@ export function SettingsView() {
                   title={"font-weight: " + w.value}
                   onClick={() => void persistFont("lyricFontWeight", String(w.value))}
                 >
-                  <span className="lf-sample" style={{ fontWeight: w.value }}>
-                    {w.label}
-                  </span>
+                  <span style={{ fontWeight: w.value }}>{w.label}</span>
                 </button>
               ))}
               <button
@@ -919,51 +705,6 @@ export function SettingsView() {
                 <Icon name="refresh" />
               </button>
             </div>
-          </div>
-
-          <div className="lf-preview-block">
-            <div className="lf-row lf-row-head">
-              <div className="lf-label">预览</div>
-              <div className="lf-hint">
-                每种语言各用自己那一栏的字体；汉字归哪一栏由"这一行的语言"决定（中文栏不会去渲染日文歌词里的汉字）；
-                留空的栏目跟随歌曲主语言，缺字按上面的「缺字时」处理
-              </div>
-            </div>
-            <div className="lf-preview">
-              {SLOTS.map((s) => (
-                <p
-                  key={s.id}
-                  className="lp-line"
-                  lang={s.lang}
-                  style={{ fontFamily: "var(--lf-" + s.id + ")" }}
-                >
-                  {s.sample}
-                </p>
-              ))}
-            </div>
-          </div>
-
-          {/* 块尾操作行：状态靠左、动作靠右。
-              位置从「粗细」和「预览」中间挪到这里 —— 那里是设置项网格，多出一行空标签的
-              操作行看着像是漏填了一项设置。
-              另注：每一项改动本来就会立即落库（见 persistFont），这个按钮只是给一个
-              明确的「再存一次」动作，用于确认落库或补救某次写入失败。 */}
-          <div className="lf-footer">
-            <div className="lf-hint">
-              {fontSave === "saving"
-                ? "正在保存…"
-                : fontSave === "saved"
-                  ? "改动已保存，完全退出后下次打开仍然生效"
-                  : "改动会立即写入设置"}
-            </div>
-            <button
-              className="pill-btn lf-save"
-              onClick={() => void saveAllFonts()}
-              disabled={fontSave === "saving"}
-            >
-              <Icon name="check" />
-              保存字体设置
-            </button>
           </div>
         </div>
 

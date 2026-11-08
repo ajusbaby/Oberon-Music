@@ -29,22 +29,14 @@ import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "../lib/lowP
 import { usePlayerStore } from "../stores/playerStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
-  SYSTEM_FONT,
   detectLineSlots,
   detectSongSlot,
-  ensureFontFaces,
-  fontStackFor,
-  lineHasMissing,
-  loadCoverage,
   lyricFontStacks,
-  readGlyphPolicy,
+  readMatchPolicy,
   readSize,
-  readSlotFont,
-  readSlotFonts,
   readWeight,
   slotLang,
 } from "../lib/lyricFont";
-import type { Coverage } from "../lib/fontCoverage";
 import { useUiStore, toast } from "../stores/uiStore";
 
 /** 鼠标静止多久后进入沉浸模式（3s） */
@@ -98,14 +90,8 @@ export function LyricsPage() {
   const systemDark = useSystemDark();
   const light = lowPower && !lpIsDark(parseLpTheme(settingsValues[LP_THEME_KEY]), systemDark);
 
-  // 歌词字体：按语言分槽（西文 / 中文 / 日文 / 韩文），每行按脚本引用对应的字体栈。
-  // 槽位里选了什么 → 行上 var(--lf-<slot>) → 该槽的完整字体栈（规则见 src/lib/lyricFont.ts）。
-  const lyricFontSlots = {
-    latin: readSlotFont(settingsValues, "latin"),
-    zh: readSlotFont(settingsValues, "zh"),
-    ja: readSlotFont(settingsValues, "ja"),
-    ko: readSlotFont(settingsValues, "ko"),
-  };
+  // 歌词字体：固定系统字体，按语言分栈（西文 / 中文 / 日文 / 韩文），每行按脚本引用。
+  // 行上 var(--lf-<slot>) → 该语言的系统字体链（规则见 src/lib/lyricFont.ts）。
   const lyricFontSize = readSize(settingsValues);
   const lyricFontWeight = readWeight(settingsValues);
 
@@ -639,11 +625,6 @@ export function LyricsPage() {
     []
   );
 
-  // 字体注册：每个「字体 × 语言槽」一份字面（受限的那份带 unicode-range），详见 lyricFont.ts
-  useEffect(() => {
-    void ensureFontFaces(settingsValues);
-  }, [lyricFontSlots.latin, lyricFontSlots.zh, lyricFontSlots.ja, lyricFontSlots.ko]);
-
   // lines 的引用稳定下来，下面两个 memo 才不会被"每次 render 都新建的空数组"击穿
   const lines = useMemo(() => lyrics?.lines ?? [], [lyrics]);
   const hasLyrics = lines.length > 0;
@@ -651,46 +632,21 @@ export function LyricsPage() {
 
   // 整首歌的主语言：决定"没设置的槽"跟随谁（一首歌一个声音）
   const songSlot = useMemo(() => detectSongSlot(lines.map((l) => l.text)), [lines]);
-  // 每个语言槽的完整字体栈（含系统兜底链）；放进 memo 是为了每帧的进度更新不重算
-  const fontStacks = useMemo(
-    () => lyricFontStacks(settingsValues, songSlot),
-    [settingsValues, songSlot]
-  );
+  // 每个语言槽的完整字体栈（系统正体链）；放进 memo 是为了每帧的进度更新不重算
+  const fontStacks = useMemo(() => lyricFontStacks(songSlot), [songSlot]);
+  // 纯汉字行怎么归属：一致性优先（默认，一律按中文）或准确优先（跟随歌典主语言）
+  const matchPolicy = readMatchPolicy(settingsValues);
   // 每一行归属的语言槽：汉字行按"简体 / 和制汉字 + 同组有没有假名"判
   const lineSlots = useMemo(
-    () => detectLineSlots(lines.map((l) => l.text), songSlot, groups),
-    [lines, songSlot, groups]
+    () => detectLineSlots(lines.map((l) => l.text), songSlot, groups, matchPolicy),
+    [lines, songSlot, groups, matchPolicy]
   );
 
-  // 缺字策略为「整行回退」时才需要覆盖表；默认的「逐字替换」完全不读字体文件
-  const glyphPolicy = readGlyphPolicy(settingsValues);
-  const [coverage, setCoverage] = useState<Record<string, Coverage | null>>({});
-  useEffect(() => {
-    if (glyphPolicy !== "line") return;
-    let alive = true;
-    void loadCoverage(settingsValues).then((m) => {
-      if (alive) setCoverage(m);
-    });
-    return () => {
-      alive = false;
-    };
-  }, [glyphPolicy, settingsValues]);
-
-  // 每一行最终用的字体栈
-  const lineStacks = useMemo(() => {
-    const chosen = readSlotFonts(settingsValues);
-    return lines.map((l, i) => {
-      const slot = lineSlots[i] ?? "latin";
-      if (glyphPolicy === "line") {
-        const id = chosen[slot];
-        if (id && id !== SYSTEM_FONT) {
-          const cov = coverage[id] ?? null;
-          if (lineHasMissing(l.text, slot, cov)) return fontStackFor(chosen, slot, songSlot, true);
-        }
-      }
-      return fontStacks.bySlot[slot];
-    });
-  }, [lines, lineSlots, glyphPolicy, coverage, settingsValues, songSlot, fontStacks]);
+  // 每一行最终用的字体栈（memo 保持字符串引用稳定，避免每次 render 触发子节点重绘）
+  const lineStacks = useMemo(
+    () => lines.map((_, i) => fontStacks.bySlot[lineSlots[i] ?? "latin"]),
+    [lines, lineSlots, fontStacks]
+  );
 
   /**
    * 歌词页完全展开后，把被它**完全盖住**的主界面隐藏。

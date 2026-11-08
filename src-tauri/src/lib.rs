@@ -180,11 +180,6 @@ pub fn run() {
             commands::audio::audio_set_output_mode,
             commands::audio::audio_output_status,
             commands::audio::audio_retry_output,
-            // 歌词字体
-            commands::fonts::font_save,
-            commands::fonts::font_read,
-            commands::fonts::font_list,
-            commands::fonts::font_delete,
             // 设置
             commands::settings::settings_get,
             commands::settings::settings_set,

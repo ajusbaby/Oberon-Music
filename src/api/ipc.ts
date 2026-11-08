@@ -173,26 +173,10 @@ export async function settingsSet(key: string, value: string): Promise<void> {
 export async function settingsGetAll(): Promise<Record<string, string>> {
   return invoke("settings_get_all");
 }
-/** 保存用户上传的歌词字体（bytes 走 ArrayBuffer 二进制 IPC），返回实际文件名 */
-export async function fontSave(name: string, data: Uint8Array): Promise<string> {
-  return invoke("font_save", { name, data });
-}
-/** 读取已保存的字体字节（原始二进制，前端 new FontFace 用） */
-export async function fontRead(name: string): Promise<ArrayBuffer> {
-  return invoke("font_read", { name });
-}
-/** 已上传的字体文件名列表 */
-export async function fontDelete(name: string): Promise<void> {
-  return invoke("font_delete", { name });
-}
 
 /// 恢复上次退出时的曲目与位置（后端装载为暂停态，不出声）
 export async function playerRestore(trackId: number, positionSecs: number, queueTrackIds?: number[]): Promise<QueuePosition> {
   return invoke("player_restore", { trackId, positionSecs, queueTrackIds });
-}
-
-export async function fontList(): Promise<string[]> {
-  return invoke("font_list");
 }
 
 export async function settingsDelete(key: string): Promise<void> {

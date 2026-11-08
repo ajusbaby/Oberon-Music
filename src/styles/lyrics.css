@@ -1,4 +1,7 @@
-/* ===== 内置歌词字体（随应用打包，Sidebar 的 logo 也在用 Ephesis）===== */
+/* ===== 内置装饰字体：只保留 Ephesis（开屏品牌字 + 侧栏 logo）。
+   歌词正文固定走系统字体栈，不再引用任何内置字体（见 src/lib/lyricFont.ts）。
+   马善政（src/assets/fonts/MaShanZheng-Regular.ttf，5.9 MB）在界面里已无使用者，
+   这里刻意不声明 @font-face —— 少了它，安装包不再打包这份字体。 ===== */
 @font-face {
     font-family: "LyricEphesis";
     src: url("../assets/fonts/Ephesis-Regular.ttf") format("truetype");
@@ -6,14 +9,6 @@
     font-style: normal;
     font-display: swap;
 }
-@font-face {
-    font-family: "LyricMaShanZheng";
-    src: url("../assets/fonts/MaShanZheng-Regular.ttf") format("truetype");
-    font-weight: 400;
-    font-style: normal;
-    font-display: swap;
-}
-
 /* =========================================================================
  * 沉浸式歌词页
  *
