@@ -71,12 +71,22 @@ export function TrackList({
     const el = viewportRef.current;
     if (!el) return;
     setViewportHeight(el.clientHeight);
-    const onScroll = () => setScrollTop(el.scrollTop);
+    // 滚动事件每个像素都来一次，直接 setState 会让整张虚拟列表按事件频率重渲染；
+    // 合并到一帧一次（rAF）即可，滚动位置本来就是按帧用的。
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setScrollTop(el.scrollTop);
+      });
+    };
     el.addEventListener("scroll", onScroll, { passive: true });
     const observer = new ResizeObserver(() => setViewportHeight(el.clientHeight));
     observer.observe(el);
     return () => {
       el.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
       observer.disconnect();
     };
   }, []);
@@ -295,11 +305,15 @@ export function TrackList({
             <Icon name="plus" />
             添加进歌单
           </div>
+          {/* 「浏览专辑」以前跳到音乐库的专辑页签就算完 —— 用户点的是某一首歌，落点却是
+              "所有专辑"的列表，还得自己再找一遍。专辑 id 就是组内任意一首曲目的 id
+              （AlbumView 走 album_tracks，服务端会先用该曲目查出 (album, album_artist) 再整组取），
+               所以这里直接把这首歌带过去，落点就是它的专辑详情页。 */}
           {menu.track.album && (
             <div
               className="context-item"
               onClick={() => {
-                nav.library("albums");
+                nav.album(menu.track.id);
                 setMenu(null);
               }}
             >

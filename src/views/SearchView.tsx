@@ -28,8 +28,11 @@ export function SearchView() {
       setSearched("");
       return;
     }
+    // ⚠️ alive 必须挂在 effect 作用域上：以前它写在 setTimeout 回调里，回调 return 的清理函数
+    //    被 setTimeout 直接丢掉，于是上一轮请求永远不会被判过期 —— 打字快时旧结果会盖掉新结果
+    //    （搜「a」的结果最后显示在「abc」下面）。
+    let alive = true;
     const timer = window.setTimeout(() => {
-      let alive = true;
       setLoading(true);
       void api
         .search(q)
@@ -44,11 +47,11 @@ export function SearchView() {
           setLoading(false);
           toast("搜索失败：" + String(e), "error");
         });
-      return () => {
-        alive = false;
-      };
     }, 250);
-    return () => window.clearTimeout(timer);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
   }, [query, version]);
 
   const nothing =

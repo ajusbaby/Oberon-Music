@@ -18,7 +18,7 @@ use state::AppState;
 use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 pub fn run() {
     tauri::Builder::default()
@@ -61,6 +61,36 @@ pub fn run() {
                 .default_window_icon()
                 .cloned()
                 .ok_or_else(|| tauri::Error::AssetNotFound("缺少窗口图标".into()))?;
+            // 窗口可见性 → 前端停帧（G-01）。
+            // 最小化 / 收进托盘时，WebView2 **不保证**会把 document.hidden 置真，于是页面里的
+            // rAF 与合成器会继续按满速跑：实测最小化后 GPU 进程仍占 2.47%，与前台 2.50% 持平，
+            // 而 dwm 已降到 0.02%（说明窗口确实不在屏幕上了，只是我们自己没停）。
+            // 这里用 500ms 的轻量轮询把"窗口到底看不看得见"推给前端；这个粒度对省电足够，
+            // 也不依赖 Windows 的最小化事件是否派发到 Tauri。
+            {
+                let app_handle = handle.clone();
+                std::thread::Builder::new()
+                    .name("win-visibility".into())
+                    .spawn(move || {
+                        let mut last: Option<bool> = None;
+                        loop {
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                            let hidden = app_handle
+                                .get_webview_window("main")
+                                .map(|w| {
+                                    !w.is_visible().unwrap_or(true)
+                                        || w.is_minimized().unwrap_or(false)
+                                })
+                                .unwrap_or(true);
+                            if last != Some(hidden) {
+                                last = Some(hidden);
+                                let _ = app_handle.emit("win-hidden", hidden);
+                            }
+                        }
+                    })
+                    .expect("窗口可见性线程创建失败");
+            }
+
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(icon)
                 .tooltip("Oberon")

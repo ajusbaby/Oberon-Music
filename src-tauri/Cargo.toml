@@ -1,6 +1,6 @@
 [package]
 name = "oberon"
-version = "0.4.5"
+version = "0.4.6"
 description = "Oberon（Tauri 2 桌面内核）"
 edition = "2021"
 
@@ -20,6 +20,8 @@ serde_json = "1"
 rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-all"] }
 # 元数据与内嵌封面
 lofty = "0.25"
+# TTML（逐字歌词）解析：流式读 XML，不建整棵树
+quick-xml = "0.37"
 # 封面缩略图（解码 + 缩放 + 编码 JPEG）。image 本来就在依赖树里（tauri/lofty 间接带入），
 # 这里只是把它提为直接依赖并显式打开 jpeg/png 两个编解码器。
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }

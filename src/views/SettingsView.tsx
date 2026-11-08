@@ -71,6 +71,14 @@ function CoverHint({
   );
 }
 
+/** 歌词字号预设：值就是 --lyric-size 的倍数（1 = 设计稿的 24px） */
+const SIZE_PRESETS: { label: string; value: number }[] = [
+  { label: "小", value: 0.85 },
+  { label: "标准", value: 1 },
+  { label: "大", value: 1.2 },
+  { label: "特大", value: 1.45 },
+];
+
 const MODES: { key: PlayMode; label: string }[] = [
   { key: "sequential", label: "顺序播放" },
   { key: "loop-all", label: "列表循环" },
@@ -78,7 +86,7 @@ const MODES: { key: PlayMode; label: string }[] = [
   { key: "shuffle", label: "随机播放" },
 ];
 
-export function SettingsView() {
+export function SettingsView() {
   const refreshStats = useLibraryStore((s) => s.refreshStats);
   const folders = useLibraryStore((s) => s.folders);
   const refreshFolders = useLibraryStore((s) => s.refreshFolders);
@@ -761,6 +769,47 @@ export function SettingsView() {
           onChange={(e) => void onPickFontFile(e.target.files?.[0])}
         />
 
+        <div className="section-title">歌词</div>
+        <div className="settings-block">
+          <div className="lf-row">
+            <div className="lf-label">大小</div>
+            <input
+              type="range"
+              className="lf-range"
+              min={Math.round(SIZE_RANGE[0] * 100)}
+              max={Math.round(SIZE_RANGE[1] * 100)}
+              value={Math.round(lyricSize * 100)}
+              onChange={(e) => void persistFont("lyricFontSize", String(Number(e.target.value) / 100))}
+              aria-label="歌词字号"
+            />
+            <span className="lf-value">{Math.round(lyricSize * 100)}%</span>
+            <button
+              className="lf-icon-btn"
+              title="恢复默认字号"
+              disabled={lyricSize === DEFAULT_SIZE}
+              onClick={() => void persistFont("lyricFontSize", String(DEFAULT_SIZE))}
+            >
+              <Icon name="refresh" />
+            </button>
+          </div>
+          <div className="lf-row">
+            <div className="lf-label">预设</div>
+            <div className="lf-options">
+              {SIZE_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  className={"chip lf-chip" + (Math.abs(lyricSize - p.value) < 0.005 ? " active" : "")}
+                  onClick={() => void persistFont("lyricFontSize", String(p.value))}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <span className="lf-hint">歌词页字号 = 24px × 这个倍数（{Math.round(lyricSize * 100)}%）</span>
+            </div>
+          </div>
+        </div>
+
         <div className="section-title">歌词字体</div>
         {/* 每个语言槽的字体栈变量设在这一层：下面的行内样字与预览块都直接引用 var(--lf-<slot>) */}
         <div
@@ -844,27 +893,6 @@ export function SettingsView() {
               ))}
               <span className="lf-hint">字体缺字时怎么处理（覆盖未检测的字体不受影响）</span>
             </div>
-          </div>
-
-          <div className="lf-row">
-            <div className="lf-label">字号</div>
-            <input
-              type="range"
-              className="lf-range"
-              min={Math.round(SIZE_RANGE[0] * 100)}
-              max={Math.round(SIZE_RANGE[1] * 100)}
-              value={Math.round(lyricSize * 100)}
-              onChange={(e) => void persistFont("lyricFontSize", String(Number(e.target.value) / 100))}
-            />
-            <span className="lf-value">{Math.round(lyricSize * 100)}%</span>
-            <button
-              className="lf-icon-btn"
-              title="恢复默认字号"
-              disabled={lyricSize === DEFAULT_SIZE}
-              onClick={() => void persistFont("lyricFontSize", String(DEFAULT_SIZE))}
-            >
-              <Icon name="refresh" />
-            </button>
           </div>
 
           <div className="lf-row">

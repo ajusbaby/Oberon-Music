@@ -283,8 +283,14 @@ export function HomeAmbient({ active, playing, paused, seed, trackId }: Props) {
   useEffect(() => { stateRef.current.playing = playing; }, [playing]);
 
   // 播放时 ~30Hz 取真实节拍（同步命令，只读一个原子量，开销可忽略）
+  // 暂停/停止时不必轮询：节拍只会衰减到 0（smooth 有 380ms 低通，不会硬跳），
+  // 继续 30Hz 打 IPC 只是白耗电。
   useEffect(() => {
     if (!active) return;
+    if (!playing) {
+      beatRef.current.real = 0;
+      return;
+    }
     let inFlight = false;
     const timer = window.setInterval(() => {
       if (inFlight) return;
@@ -299,7 +305,7 @@ export function HomeAmbient({ active, playing, paused, seed, trackId }: Props) {
         .finally(() => { inFlight = false; });
     }, 33);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [active, playing]);
 
   useEffect(() => {
     if (!everActive) { // 画布常驻：只在尚未激活过时不建

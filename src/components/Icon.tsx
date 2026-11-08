@@ -35,9 +35,7 @@ export type IconName =
   | "person"
   | "refresh"
   | "check"
-  | "cast"
-  | "layout-poster"
-  | "layout-center"
+  | "speaker"
   | "sort";
 
 // 侧栏导航三枚（home / search / library）为**有意偏离设计稿**：设计稿沿用的是 2014 版
@@ -112,10 +110,11 @@ const PATHS: Record<IconName, string> = {
   refresh:
     "M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-8 8s3.58 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z",
   check: "M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
-  cast: "M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 13v5M9 20h6",
-  // 歌词页布局切换：左栏实框 = 「左封面 + 右歌词」；三条居中横线 = 「歌词居中」
-  "layout-poster": "M4 4h16v16H4zM10 4v16",
-  "layout-center": "M6 8h12M4 12h16M6 16h12",
+  // 输出设备（音箱箱体）：顶部长槽 = 高音口，下方圆 = 低音单元。
+  // 不要用原来的 cast（两道信号弧 + 支脚）：那枚没登记描边样式，svg 继承 CSS 的
+  // fill:currentColor，开放弧被当成填充路径画成残缺色块，看起来就是"图标缺一块"。
+  speaker:
+    "M5.2 3h13.6A2.2 2.2 0 0 1 21 5.2v13.6a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 18.8V5.2A2.2 2.2 0 0 1 5.2 3zM9 7.5h6M12 11.2a3.05 3.05 0 1 0 0 6.1 3.05 3.05 0 0 0 0-6.1z",
   // 音乐库「排序方式」：三条递减横线（Material 的 sort），与 plus / more / trash 同属实心族
   sort: "M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z",
 };
@@ -144,8 +143,7 @@ const STROKE_STYLE: Partial<Record<IconName, CSSProperties>> = {
   "volume-high": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
   "volume-low": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
   "volume-muted": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
-  "layout-poster": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
-  "layout-center": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
+  speaker: { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
 };
 
 interface IconProps {

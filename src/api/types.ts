@@ -233,15 +233,27 @@ export interface QueuePosition {
   count: number;   // 队列长度
 }
 
+/** 逐字歌词里的一个词（来自增强 LRC 的 <mm:ss.xx> 或 TTML 的 <span>） */
+export interface LyricWord {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
 /** 歌词行：timeMs 为 0 表示无时间轴（纯文本歌词） */
 export interface LyricLine {
   timeMs: number;
   text: string;
+  /**
+   * 逐字时间轴。有它时卡拉OK 按"词"推进（真实词级时间）；
+   * 没有它（普通 LRC / 纯文本）则退回按行内线性插值。
+   */
+  words?: LyricWord[];
 }
 
 /** 歌词查询结果 */
 export interface LyricsResult {
-  /** lrc-file | embedded | none */
+  /** lrc-file | ttml-file | embedded | none */
   source: string;
   /** 是否带时间轴 */
   synced: boolean;

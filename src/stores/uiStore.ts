@@ -42,6 +42,34 @@ interface UiState {
 
 let toastSeq = 1;
 
+/**
+ * 吐司定时器表：以前 setTimeout 是个裸调用，用户点掉吐司后定时器照样跑到点，
+ * 再对 toasts 数组 setState 一次（渲染一次、且顺序一旦错乱就会误删新吐司）。
+ * 现在每个 id 的定时器都在这里登记，手动关 / 被挤掉都会先撤表。
+ */
+const toastTimers = new Map<number, number>();
+
+function clearToastTimer(id: number) {
+  const timer = toastTimers.get(id);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    toastTimers.delete(id);
+  }
+}
+
+function dropToast(id: number) {
+  clearToastTimer(id);
+  useUiStore.setState({ toasts: useUiStore.getState().toasts.filter((t) => t.id !== id) });
+}
+
+function scheduleToast(id: number, ms: number) {
+  clearToastTimer(id);
+  toastTimers.set(
+    id,
+    window.setTimeout(() => dropToast(id), ms),
+  );
+}
+
 export const useUiStore = create<UiState>((set, get) => ({
   queueOpen: false,
   lyricsOpen: false,
@@ -67,14 +95,22 @@ export const useUiStore = create<UiState>((set, get) => ({
     set({ dialog: null });
   },
   toast(text, kind = "info") {
+    const ttl = kind === "error" ? 5000 : 2800;
+    // 同一句话连发（一次扫描里每条失败都报一遍）不该叠成一列：复用现有的那条，只续时。
+    const dup = get().toasts.find((t) => t.text === text);
+    if (dup) {
+      scheduleToast(dup.id, ttl);
+      return;
+    }
     const id = toastSeq++;
-    set({ toasts: [...get().toasts, { id, text, kind }] });
-    setTimeout(() => {
-      set({ toasts: get().toasts.filter((t) => t.id !== id) });
-    }, kind === "error" ? 5000 : 2800);
+    const next = [...get().toasts, { id, text, kind }];
+    // 最多同时 4 条：最老的被挤掉，连带撤掉它的定时器
+    for (const gone of next.slice(0, Math.max(0, next.length - 4))) clearToastTimer(gone.id);
+    set({ toasts: next.slice(-4) });
+    scheduleToast(id, ttl);
   },
   dismissToast(id) {
-    set({ toasts: get().toasts.filter((t) => t.id !== id) });
+    dropToast(id);
   },
 }));
 

@@ -197,7 +197,7 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
             title="输出设备"
             onClick={() => toast("当前使用系统默认输出设备", "info")}
           >
-            <Icon name="cast" />
+            <Icon name="speaker" />
           </button>
         )}
         <div className="volume-control">

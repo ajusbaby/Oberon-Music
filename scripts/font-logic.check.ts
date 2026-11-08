@@ -10,6 +10,7 @@ import {
   fontStackFor,
   lineHasMissing,
   sampleCoverage,
+  systemChainFor,
 } from "../src/lib/lyricFont";
 
 export function run(): number {
@@ -128,6 +129,30 @@ export function run(): number {
   ok("韩文行能拿到西文槽借出的拉丁", sKo2.includes(bare(latinFont)));
   const sysOnly = fontStackFor({ latin: "", zh: SYSTEM_FONT, ja: "", ko: "" }, "zh", "zh");
   ok("显式「系统默认」不再被主语言字体接管", !sysOnly.includes("LyricUser"));
+
+  // ---------- 4. 系统兜底链：按语言分（用户报的"一行里两个字完全不是一款字体"）----------
+  // 四种语言共用一条链时，日文正体（Yu Gothic UI）会抢在中文正体前面接走大部分汉字，
+  // 简体专用字（说/过/话/这/们/时/间/爱/难…）再落到雅黑 → 一行中文被劈成两三种字体。
+  const zhChain = systemChainFor("zh");
+  const jaChain = systemChainFor("ja");
+  const koChain = systemChainFor("ko");
+  const at = (chain: string[], fam: string) => chain.indexOf(fam);
+  const YAHEI = '"Microsoft YaHei"';
+  const YUGOTH = '"Yu Gothic UI"';
+  const MALGUN = '"Malgun Gothic"';
+  ok("中文链：中文正体在日文正体之前", at(zhChain, YAHEI) >= 0 && at(zhChain, YAHEI) < at(zhChain, YUGOTH));
+  ok("中文链：中文正体在韩文正体之前", at(zhChain, YAHEI) < at(zhChain, MALGUN));
+  ok("日文链：日文正体在中文正体之前", at(jaChain, YUGOTH) >= 0 && at(jaChain, YUGOTH) < at(jaChain, YAHEI));
+  ok("韩文链：韩文正体在中文正体之前", at(koChain, MALGUN) >= 0 && at(koChain, MALGUN) < at(koChain, YAHEI));
+  ok("每条链都从界面西文正体开始（西文与西文标点仍走界面字体）", zhChain[0] === "Inter" && jaChain[0] === "Inter" && koChain[0] === "Inter");
+  ok("每条链都以通用族收尾", zhChain[zhChain.length - 1] === "sans-serif" && jaChain[jaChain.length - 1] === "sans-serif" && koChain[koChain.length - 1] === "sans-serif");
+  {
+    // 默认（四个槽都没选字体）：中文行的栈里，第一个 CJK 系统字体必须是中文正体
+    const s = fontStackFor({ latin: "", zh: "", ja: "", ko: "" }, "zh", "zh");
+    const fams = s.split(", ").map((x) => x.trim());
+    const firstCjk = fams.find((f) => f === YAHEI || f === YUGOTH || f === MALGUN || f === "Meiryo" || f === "SimSun" || f === '"Noto Sans SC"');
+    eq("默认中文行：第一个 CJK 字体是中文正体", firstCjk, YAHEI);
+  }
 
   console.log("\n--- 实际字体栈（前 4 个 family）---");
   const head = (label: string, s: string) => console.log("  " + label + ": " + s.split(", ").slice(0, 4).join(" | "));

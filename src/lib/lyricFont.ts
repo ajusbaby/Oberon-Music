@@ -1,6 +1,6 @@
 // 歌词字体：按**语言**分槽 —— 西文 / 中文 / 日文 / 韩文，一个语言一个字体。
 //
-// 三条硬规则（都由这一行的语言决定，与"哪个槽被设置过"无关）：
+// 四条硬规则（都由这一行的语言决定，与"哪个槽被设置过"无关）：
 //
 //   ① 有争议的码位只由**这一行的语言**决定。
 //      汉字是中日共用的码位（U+4E00–9FFF…），所以中文槽**不把汉字借给别的语言的行**，
@@ -10,6 +10,9 @@
 //      本语言的行还会额外用同一字体的**不限范围**那份来补缺（一首歌一个声音）。
 //   ③ 行上打 lang（zh-Hans / ja / ko / en）：中日汉字的字形差异（直 / 骨 / 今）码位相同，
 //      unicode-range 与 font-family 都解决不了，只有 lang 能修。
+//   ④ **系统兜底链也要按语言分**（systemChainFor）：font-family 是逐字回退，
+//      只要四种语言共用一条链，日文正体就会抢在中文正体前面接走大部分汉字，
+//      简体专用字再落到雅黑/韩文正体 → 一行里两三种字体（见 SYSTEM_CJK 处的实测数据）。
 //
 // 另外两件与"覆盖"有关的事（见 src/lib/fontCoverage.ts）：
 //   · 字体文件的覆盖范围常常小于语言码位范围（日文字体缺简体字）→ 逐字回退会混排；
@@ -166,21 +169,80 @@ export function slotLang(slot: FontSlot): string {
   return SLOT_DEF.get(slot)?.lang ?? "en";
 }
 
-/** 系统兜底链：按语言显式排序 —— 用户槽位没覆盖到的文字落到该语言的本地正体，而非听凭隐式回退 */
-const SYSTEM_CHAIN = [
+/**
+ * 界面西文正体（与 index.css 的 body 字体同源）：只覆盖拉丁字母/数字/西文标点，
+ * 任何一款都不含汉字，所以放在汉字前面既保住"西文用界面字体"，又抢不走汉字。
+ */
+const UI_LATIN = [
   "Inter",
   '"Segoe UI"',
-  '"Yu Gothic UI"',
-  "Meiryo",
-  '"Malgun Gothic"',
-  '"Microsoft YaHei"',
-  '"Noto Sans CJK JP"',
-  '"Noto Sans CJK KR"',
-  '"Noto Sans CJK SC"',
   "-apple-system",
   "BlinkMacSystemFont",
-  "sans-serif",
+  '"Helvetica Neue"',
+  "Arial",
 ];
+
+/**
+ * 各语言槽的系统 CJK 正体链（**本语言在前，别语言只当缺字兜底**）。
+ *
+ * ⚠️ 这里必须是四条链，不能像 0.4.5 那样四种语言共用一条。原因是 CSS 的 font-family 是
+ * **逐字回退**：查到一个字该用哪款字体，是"从前往后第一个含该字形的字体"，与整行的语言无关。
+ * 而汉字是中日韩共用码位，各款系统字体对"常用汉字"的覆盖并不相同：
+ *   · Yu Gothic UI（日文正体）覆盖日文常用汉字，但**不含简体专用字**（说/过/话/这/们/时/间/爱/难…）；
+ *   · Microsoft YaHei（中文正体）覆盖全部常用简繁汉字。
+ * 共用一条链（旧链把 Yu Gothic UI 排在 Microsoft YaHei 之前）时，一行中文会被劈成两三种字体：
+ * 日文正体覆盖得到的字用它、简体专用字落到后面的雅黑、再少见的落到 Malgun Gothic（韩文正体）。
+ * 实测（Chromium + DirectWrite，本机真实链）：
+ *   旧链 "说过的话都算数"  → Yu Gothic UI[4] + Microsoft YaHei[3]
+ *   旧链 "这是我们的青春 时间都去哪儿了" → Segoe UI[1] + Yu Gothic UI[10] + Microsoft YaHei[4]
+ *   新链（中文链）"说过的话都算数" → Microsoft YaHei[7]（单一字体）
+ * 这正是用户报的"一行里两个字完全不是一款字体"。
+ *
+ * 排序原则：本语言正体（含同语族备份） → 邻近语言的 CJK 正体（只用来兜住本语言字体缺的字）。
+ * 最后交给通用族 sans-serif：它按 lang 走系统 locale 映射，是最后的保险。
+ */
+const SYSTEM_CJK: Record<FontSlot, string[]> = {
+  zh: [
+    '"Microsoft YaHei"',
+    '"Noto Sans SC"',
+    '"Source Han Sans SC"',
+    '"Noto Sans CJK SC"',
+    '"PingFang SC"',
+    '"Hiragino Sans GB"',
+    "DengXian",
+    '"Microsoft JhengHei"',
+    "SimSun",
+    '"Noto Sans CJK TC"',
+    // 连中文系的字体都缺的字（生僻字/和制汉字…）才轮到日韩正体，顺序仍排在中文之后
+    '"Yu Gothic UI"',
+    "Meiryo",
+    '"Malgun Gothic"',
+  ],
+  ja: [
+    '"Yu Gothic UI"',
+    '"Yu Gothic"',
+    "Meiryo",
+    '"MS Gothic"',
+    '"Hiragino Kaku Gothic ProN"',
+    '"Noto Sans CJK JP"',
+    '"Microsoft YaHei"',
+    '"Malgun Gothic"',
+  ],
+  ko: [
+    '"Malgun Gothic"',
+    '"Noto Sans CJK KR"',
+    '"Apple SD Gothic Neo"',
+    '"Microsoft YaHei"',
+    '"Yu Gothic UI"',
+  ],
+  // 西文行不该出现汉字，但真出现时按中文处理（界面语言是中文），不要落进日文正体
+  latin: ['"Microsoft YaHei"', '"Noto Sans SC"', '"Yu Gothic UI"'],
+};
+
+/** 某一行的系统兜底链：界面西文正体 → 该语言的语言正体 → 通用族 */
+export function systemChainFor(slot: FontSlot): string[] {
+  return [...UI_LATIN, ...(SYSTEM_CJK[slot] ?? SYSTEM_CJK.zh), "sans-serif"];
+}
 
 /* ============================ 字体 id / 族名 ============================ */
 
@@ -400,7 +462,8 @@ export function detectLineSlots(
 
 /**
  * 某一行的字体栈。固定规则、与点击顺序无关：
- *   本语言槽（独占范围） → 其他已设槽（**只借独占脚本**） → 主语言槽字体（不限范围，补缺） → 系统兜底链
+ *   本语言槽（独占范围） → 其他已设槽（**只借独占脚本**） → 主语言槽字体（不限范围，补缺）
+ *   → 本语言的系统兜底链（systemChainFor，见那里的实测数据）
  * skipOwn：该行缺字且策略为"整行回退"时，把本语言槽的字体整体撤掉（连补缺层一起）。
  */
 export function fontStackFor(
@@ -430,7 +493,7 @@ export function fontStackFor(
   let filler = ownSet ? (own === SYSTEM_FONT ? "" : own) : songSlot ? chosen[songSlot] : "";
   if (skipOwn && filler === own) filler = "";
   if (filler && filler !== SYSTEM_FONT) push(familyOf(filler));
-  for (const f of SYSTEM_CHAIN) push(f);
+  for (const f of systemChainFor(lineSlot)) push(f);
   return parts.join(", ");
 }
 
