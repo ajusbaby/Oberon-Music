@@ -1,10 +1,12 @@
 // 应用外壳 —— 与「样式设计.html」的 .app-shell 结构一一对应
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen } from "@tauri-apps/api/event";
 import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { PlayerBar } from "./components/PlayerBar";
 import { DialogLayer } from "./components/DialogLayer";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LyricsPage } from "./components/LyricsPage";
 import { HomeAmbient } from "./components/HomeAmbient";
 import { SplashScreen, shouldShowSplash } from "./components/SplashScreen";
@@ -23,7 +25,7 @@ import { usePlayerStore, initPlayerEvents } from "./stores/playerStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { playerEvents } from "./api/events";
 import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "./lib/lowPower";
-import { setWinFocused } from "./lib/winFocus";
+import { setWinFocused, setWinHidden as publishWinHidden } from "./lib/winFocus";
 import { playerPause, playerRestore } from "./api/ipc";
 import { loadCoverage } from "./lib/lyricFont";
 
@@ -126,6 +128,30 @@ export default function App() {
    * 完全绕过 lib/frameBudget.ts 的帧预算）。
    */
   const [focused, setFocused] = useState(true);
+  /**
+   * 窗口是否真的"看得见"（最小化 / 收进托盘时为 true）。
+   * 由 Rust 侧 500ms 轮询 win-hidden 事件推过来 —— WebView2 最小化时不一定把 document.hidden
+   * 置真，只靠页面自己判断会漏。它比 focused 更狠：失焦只是"没人操作"，最小化是"根本没在屏幕上"。
+   */
+  const [winHidden, setWinHidden] = useState(false);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<boolean>("win-hidden", (e) => setWinHidden(!!e.payload))
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* 非 Tauri 环境（纯浏览器）忽略 */
+      });
+    return () => unlisten?.();
+  }, []);
+
+  // 把 win-hidden 同步给 JS 逐帧循环（lib/winFocus 的 isWindowInvisible）：
+  // CSS 侧只靠 .win-hidden 类停动画，而 canvas 循环看不见类，必须走这个信号。
+  useEffect(() => {
+    publishWinHidden(winHidden);
+  }, [winHidden]);
+
   useEffect(() => {
     const apply = (v: boolean) => {
       setFocused(v);
@@ -221,13 +247,31 @@ export default function App() {
       const typing =
         !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
       if (typing) return;
+      /**
+       * 首页的 ←/→ 归 Coverflow 独占（它在 src/components/Coverflow.tsx 里另有一条 window keydown
+       * 用来切卡片）。两处同时响应时，一次按键会：① 内核切歌 ② 卡片移动 ③ 0.42s 后
+       * onPlay(album) 把**整个队列替换成那张专辑** —— 用户看到的是"连跳两首 + 队列被换掉"。
+       * 被歌词页盖住时首页不可见也不可操作，此时方向键仍由这里切歌。
+       */
+      const ui = useUiStore.getState();
+      // 弹层（对话框 / 队列面板）打开时键盘归弹层：空格用于激活弹层里的焦点按钮，
+      // 方向键在弹层内移动，Esc 由弹层自己关。以前这里照常响应，会在弹层上"隔空"切歌。
+      if (ui.dialog || ui.queueOpen) return;
+      const homeOwnsArrows = useNavStore.getState().view.name === "home" && !ui.lyricsOpen;
+      // 焦点停在按钮/链接上时，空格交给浏览器做原生激活：preventDefault 会吞掉 click，
+      // 于是 Tab 到「播放」再按空格什么都不发生（键盘用户等于没有这个按钮）。
+      const activatable =
+        !!el && (el.tagName === "BUTTON" || el.tagName === "A" || el.getAttribute("role") === "button");
       if (e.code === "Space") {
+        if (activatable) return;
         e.preventDefault();
         void usePlayerStore.getState().toggle();
       } else if (e.key === "ArrowLeft") {
+        if (homeOwnsArrows) return;
         e.preventDefault();
         void usePlayerStore.getState().previous();
       } else if (e.key === "ArrowRight") {
+        if (homeOwnsArrows) return;
         e.preventDefault();
         void usePlayerStore.getState().next();
       } else if (e.key === "Escape") {
@@ -262,7 +306,8 @@ export default function App() {
         (playing ? " playing" : "") +
         (lowPower ? " low-power" : "") +
         (darkShell ? " theme-dark" : "") +
-        (focused ? "" : " win-blur")
+        (focused ? "" : " win-blur") +
+        (winHidden ? " win-hidden" : "")
       }
     >
       {/* 首页氛围背景：z-index:-1 落在外壳底色之上、所有内容之下，由半透明毛玻璃"霜化" */}
@@ -273,7 +318,8 @@ export default function App() {
         /* 歌词页打开即**冻结**（而不是卸载）：最后一帧画面留着，所以不会出现
            "光雾先消失、进场动画才出来"的观感；同时不再产帧 —— 它上方侧栏/播放条的
            毛玻璃也就不必逐帧重算，省下的正是进场峰值里那 3 个点。 */
-        paused={lyricsOpen}
+        /* 最小化/进托盘也冻结：此时整窗根本不在屏幕上，光雾继续 30fps 只是白烧电。 */
+        paused={lyricsOpen || winHidden}
         playing={playing}
         seed={ambientSeed}
         trackId={ambientTrackId}
@@ -283,11 +329,21 @@ export default function App() {
         <main className="main-content">
           <TopBar maximized={maximized} />
           <ScanBanner />
-          <CurrentView />
+          {/* 视图级兜底：某页崩了只坏这一块，侧栏 / 播放条继续能用（以前整窗白屏） */}
+          <ErrorBoundary scope="view" resetKey={view.name + ":" + (view.id ?? "") + ":" + (view.key ?? "")}>
+            <CurrentView />
+          </ErrorBoundary>
         </main>
       </div>
       <PlayerBar />
-      <LyricsPage />
+      {/* 歌词页是覆盖层，兜底画面没地方放卡片：出错就关掉它并 toast，音乐继续放 */}
+      <ErrorBoundary
+        scope="silent"
+        resetKey={lyricsOpen ? "open" : "closed"}
+        onError={() => useUiStore.getState().closeLyrics()}
+      >
+        <LyricsPage />
+      </ErrorBoundary>
       <DialogLayer />
       <Toasts />
       {/* 开屏挂在外壳内部：这样自动被外壳的圆角 + overflow:hidden 裁成窗口形状 */}

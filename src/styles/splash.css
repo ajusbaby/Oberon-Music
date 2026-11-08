@@ -43,15 +43,37 @@
        入场感由内部元素负责（光斑 bg-in、书写揭示、按钮 fade-up），底色一开始就是实的。 */
 }
 
-/* 点击「开始使用」后整屏淡出 */
+/* 点击「开始使用」后整屏淡出。
+   ⚠️ 这里**刻意不做整屏 filter / transform 动画**（旧实现是 opacity + scale + blur(10px) 三条一起动）。
+   原因与文件开头那段「方案 A」的实测是同一类问题：带 filter 动画的层无法被扁平化，
+   整窗面积（1267×902 起，全屏更大）的高斯模糊**每帧重新光栅化**，下面已经合成好的主界面
+   （封面流 5 张 backdrop-filter 卡 + 底栏 blur + 光雾）也跟着每帧重算 —— 点击「开始使用」后
+   那 0.65s 的占用尖峰就是这么来的。而且这条动画在部分 WebView2 版本上会直接掉帧到看不出过渡，
+   表现成「点了按钮画面硬切」。
+   现在父层只动画 opacity：opacity < 1 时整棵子树被栅格化成**一张**纹理，之后只是纯合成插值，
+   代价与窗口大小无关。放大与虚化的观感交给下面内容层（面积只有文字 + 按钮）。 */
 .splash.is-leaving {
     pointer-events: none;
-    animation: splash-out 0.65s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    /* 只在这一层动画期间提层：开屏常驻时故意不写 will-change，
+       否则书写那 3 秒里整棵子树会被扁平化，mask 动画反而要重绘整屏。 */
+    will-change: opacity;
+    animation: splash-out 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 @keyframes splash-out {
-    from { opacity: 1; transform: scale(1);    filter: blur(0); }
-    to   { opacity: 0; transform: scale(1.04); filter: blur(10px); }
+    from { opacity: 1; }
+    to   { opacity: 0; }
+}
+
+/* 内容层：轻微推近。transform 是合成属性，不触发重绘；
+   透明度的叠加交给父层统一处理（两层同时降 alpha 会让淡出在前半段更陡，这里刻意不重复）。 */
+.splash.is-leaving .splash__content {
+    animation: splash-content-out 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+@keyframes splash-content-out {
+    from { transform: scale(1); }
+    to   { transform: scale(1.06); }
 }
 
 /* ---------- 背景：彩色光斑 + 磨砂白 ---------- */
@@ -218,8 +240,11 @@
  * 无障碍：系统开了「减少动态效果」就整段静态化，直接呈现书写完成的画面
  * ========================================================================= */
 @media (prefers-reduced-motion: reduce) {
-    /* 默认档只剩"书写揭示"与"按钮浮出"两条动画；光斑已经是静态的 */
-    .splash,
+    /* 默认档只剩"书写揭示"与"按钮浮出"两条动画；光斑已经是静态的。
+       ⚠️ .splash 本身不在这份列表里 —— 它一旦 animation: none，
+       点「开始使用」后整屏会**硬切**到主界面（既没有过渡，又赶在主界面首帧合成时瞬移），
+       实测就是"点了没反应、然后画面突然变了"。开屏离场单独给一条极短的纯透明度过渡，
+       见下面那条：不含位移、放大与模糊，对前庭刺激可忽略。 */
     .writer__text,
     .splash__actions {
         animation: none !important;
@@ -227,4 +252,9 @@
         transform: none !important;
     }
     .writer__text { --reveal: 102% !important; }
+    .splash.is-leaving {
+        will-change: opacity;
+        animation: splash-out 0.18s linear forwards !important;
+    }
+    .splash.is-leaving .splash__content { animation: none !important; }
 }

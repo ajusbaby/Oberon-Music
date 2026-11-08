@@ -40,6 +40,7 @@ const TAU = Math.PI * 2;
 import { useSettingsStore } from "../stores/settingsStore";
 import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "../lib/lowPower";
 import { frameBudget } from "../lib/frameBudget";
+import { isWindowInvisible, onWindowVisibilityChange } from "../lib/winFocus";
 
 function smootherstep(t: number): number {
   t = Math.min(1, Math.max(0, t));
@@ -62,6 +63,9 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
     drawnPhase: 0,
     dirty: true,
   });
+  // 按需点火的入口：effect 内部把真正的 kick 挂在这里。
+  // 事件与 props 变化都走它 —— 没有逐帧变化时循环是停着的，必须有人把它叫醒。
+  const kickRef = useRef<() => void>(() => {});
   // 低功耗：波形不再逐帧流动（只在数值变化时重画），rAF 降到 ~30fps
   const lowPower = useSettingsStore((s) => s.values["lowPower"] === "on");
   // ⚠️ canvas 的颜色只在"挂载 + resize"时读一次 CSS 变量（见下面的 readColors），
@@ -73,6 +77,10 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
   live.current.value = value;
   live.current.playing = playing;
   live.current.lowPower = lowPower;
+  // 进度 / 播放态 / 低功耗开关变化：重画一帧；播放中由循环自己接着跑
+  useEffect(() => {
+    kickRef.current();
+  }, [value, playing, lowPower]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -91,22 +99,8 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
 
     let W = 0;
     let H = 0;
-    const resize = () => {
-      const r = wrap.getBoundingClientRect();
-      if (!r.width) return;
-      const dpr = window.devicePixelRatio || 1;
-      W = r.width;
-      H = r.height;
-      canvas.width = Math.round(W * dpr);
-      canvas.height = Math.round(H * dpr);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      readColors();
-      live.current.dirty = true;
-    };
-    const ro = new ResizeObserver(resize);
-    ro.observe(wrap);
-    resize();
-
+    let raf = 0;
+    let last = performance.now();
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     const draw = () => {
@@ -166,16 +160,28 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
       s.drawnPhase = s.phase;
     };
 
-    let raf = 0;
-    let last = performance.now();
-    const loop = (now: number) => {
+    /**
+     * 还有没有"在动"的东西：波浪在流动 / 正在拖拽 / hover 过渡还没走完。
+     * 三者都不成立时就没有任何逐帧变化的量 —— 此时不该再排 rAF。
+     * 旧实现是无条件 requestAnimationFrame 常驻：暂停、鼠标不在条上、窗口在后台，
+     * 回调照样按刷新率被叫起来（虽然只在值变化时才重画，但调度与合成活动一直在）。
+     */
+    const stillMoving = () => {
+      const s = live.current;
+      if (s.dragging) return true;
+      if (!reduceMotion && !s.lowPower && s.playing) return true;
+      return Math.abs(s.hover - (s.hoverTarget ? 1 : 0)) > 0.002;
+    };
+
+    function loop(now: number) {
+      raf = 0;
       // 全局帧预算（高刷屏限到 ~60fps）+ 低功耗更严的 30fps 闸
       if (!frameBudget(now)) {
-        raf = requestAnimationFrame(loop);
+        schedule();
         return;
       }
       if (live.current.lowPower && now - last < 32) {
-        raf = requestAnimationFrame(loop);
+        schedule();
         return;
       }
       const dt = Math.min((now - last) / 1000, 0.05);
@@ -203,12 +209,48 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
         s.dirty = false;
         draw();
       }
+      // 只有确实还有东西在动才继续排帧；静止时彻底停掉（由事件重新点火）
+      if (stillMoving()) schedule();
+    }
+
+    function schedule() {
+      if (raf || isWindowInvisible()) return;
       raf = requestAnimationFrame(loop);
+    }
+
+    /** 外部事件（props 变化 / 指针 / 尺寸变化）→ 立刻画一帧，需要时继续跑 */
+    const kick = () => {
+      live.current.dirty = true;
+      schedule();
     };
-    raf = requestAnimationFrame(loop);
+    kickRef.current = kick;
+
+    const resize = () => {
+      const r = wrap.getBoundingClientRect();
+      if (!r.width) return;
+      const dpr = window.devicePixelRatio || 1;
+      W = r.width;
+      H = r.height;
+      canvas.width = Math.round(W * dpr);
+      canvas.height = Math.round(H * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      readColors();
+      kick();
+    };
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
+    resize();
+
+    // 后台/最小化真的不排帧，重新可见时补一帧（否则画布停在被隐藏前的样子）
+    const offVisibility = onWindowVisibilityChange(() => {
+      if (!isWindowInvisible()) kick();
+    });
 
     return () => {
-      cancelAnimationFrame(raf);
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      kickRef.current = () => {};
+      offVisibility();
       ro.disconnect();
     };
     // darkTheme 进依赖：切昼夜时重新读色并重画（lowPower 走 ref，不需要重跑）
@@ -230,15 +272,18 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
       ref={wrapRef}
       onPointerEnter={() => {
         live.current.hoverTarget = true;
+        kickRef.current();
       }}
       onPointerLeave={() => {
         live.current.hoverTarget = false;
+        kickRef.current();
       }}
       onPointerDown={(e) => {
         if (disabled) return;
         e.preventDefault();
         wrapRef.current?.setPointerCapture(e.pointerId);
         live.current.dragging = true;
+        kickRef.current();
         onScrub?.(ratioAt(e.clientX));
       }}
       onPointerMove={(e) => {
@@ -254,9 +299,12 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
           /* 指针已释放 */
         }
         onCommit(ratioAt(e.clientX));
+        // 松手后 hover 过渡还要收一下尾，交给循环跑完再自己停
+        kickRef.current();
       }}
       onPointerCancel={() => {
         live.current.dragging = false;
+        kickRef.current();
       }}
     >
       <canvas ref={canvasRef} />

@@ -935,7 +935,6 @@
     gap: 10px;
 }
 
-
 .playlist-name {
     flex: 1;
     min-width: 0;
@@ -1289,7 +1288,6 @@
     flex-shrink: 0;
 }
 
-
 /* ===== 封面完整显示（用户要求：卡片上的封面必须完整、与内嵌原图一致）===== */
 /* 设计稿的 .cf-cover 是「卡片宽 - 20px」的正方形区域，但没有给内部 <img> 指定尺寸：
    内嵌封面通常是 800~3000px 的方图，直接放进 204×204 的 overflow:hidden 框里
@@ -1313,7 +1311,6 @@
 .dialog-track-cover img {
     object-fit: contain;
 }
-
 
 /* 未载入曲目时的进度条：置灰且不可拖动 */
 .progress-area.idle {
@@ -1376,7 +1373,6 @@
     flex-shrink: 0;
 }
 
-
 /* ===== 卡片文字清晰度（125% 缩放下尤其明显）===== */
 /* 原因：.cf-card 带 backdrop-filter 且处于 3D 变换中，Chromium 会为它建立独立的
    backdrop 渲染表面，文字按变换前的分辨率栅格化后再被放大/重采样，于是发虚。
@@ -1401,7 +1397,6 @@
     -webkit-font-smoothing: antialiased;
 }
 
-
 /* ===== 封面流自适应舞台（全屏/大窗口下整体放大）===== */
 /* .cf-perspective 保持设计稿的 920×330 基准尺寸，由外层按可用空间缩放，
    内部 X/缩放/景深等常量因此完全不受影响。 */
@@ -1417,7 +1412,6 @@
     flex: 0 0 auto;
 }
 
-
 /* ===== 对话框遮罩圆角 ===== */
 /* .dialog-overlay 是 position: fixed，会脱离 .app-shell 的 overflow 裁剪，
    于是遮罩仍然铺满矩形窗口，窗口四角露出方形暗边（看起来像多余阴影）。
@@ -1429,7 +1423,6 @@
 .app-shell.maximized .dialog-overlay {
     border-radius: 0;
 }
-
 
 /* ===== 卡片标题过长时循环滚动 ===== */
 /* 设计稿是单行省略号；超长名字改成跑马灯：内容复制一份，
@@ -1471,8 +1464,6 @@
         animation: none;
     }
 }
-
-
 
 /* ===== 详情页操作行：按钮较多时换行，避免最后一个按钮被挤出可视区 ===== */
 /* 播放列表详情有 5 个操作（播放/随机/添加/重命名/删除）+ 返回，
@@ -1530,7 +1521,6 @@
 .playlist-row:hover .playlist-count {
     opacity: 0;
 }
-
 
 /* ===== 播放条图标尺寸 ===== */
 /* 播放/上一首/下一首：设计稿 18/22px 基础上净放大 20%（曾试 50%，偏大已回调） */
@@ -1804,7 +1794,6 @@
     color: rgba(255, 255, 255, 0.97);
 }
 
-
 /* ===== 亚克力磨砂材质（按用户给定范例实现）=====
    范例的关键认知：**"厚度"不来自不透明度，而来自
      ① 四边内侧高光（上强下弱）+ 外投影  ② 颗粒层（overlay）  ③ 表面斜向光泽带**
@@ -1884,8 +1873,10 @@
        饱和度补偿放到背景色本身（见上方的白渐变），观感差异用像素比对确认。 */
     /* 注：试过去掉 saturate 省一个 pass，但在"彩色背板"（光雾）下无法用像素比对确认差异、
        收益又小（侧栏约 0.2MP），为满足"观感零变化"这条硬要求而保留原样。 */
-    backdrop-filter: blur(20px) saturate(1.25);
-    -webkit-backdrop-filter: blur(20px) saturate(1.25);
+    /* 半径 20px → 12px：背后同样是低频的光雾渐变，模糊半径的观感差别远小于成本差别
+       （成本随半径近似线性）。saturate 保留 —— 它补偿的是白渐变造成的去饱和，与半径无关。 */
+    backdrop-filter: blur(12px) saturate(1.25);
+    -webkit-backdrop-filter: blur(12px) saturate(1.25);
     border-right: 1px solid rgba(255, 255, 255, 0.36);
 }
 
@@ -1909,9 +1900,14 @@
         calc(var(--player-radius-bottom) - 1px) calc(var(--player-radius-bottom) - 1px)
     );
     /* 底色 76% 不透明 → 背板只占 24%，saturate/brightness 基本看不见，去掉省两个 pass */
-    /* 同上：保留 saturate/brightness（底色 76% 不透明，差异本就极小，但无法用像素比对坐实） */
-    backdrop-filter: blur(24px) saturate(180%) brightness(1.06);
-    -webkit-backdrop-filter: blur(24px) saturate(180%) brightness(1.06);
+    /* 半径 24px → 10px，并去掉 saturate/brightness：
+       ① 背后是首页光雾（低频、连续渐变），24px 与 10px 的模糊结果几乎同形，肉眼无法区分；
+       ② 模糊成本随半径近似**线性**，10px 约为 24px 的 1/2.4，而 saturate/brightness 是两次额外的
+          全区采样 —— 底色 76% 不透明时它们本来就看不见；
+       ③ 光雾每帧重绘时，这块毛玻璃每帧都要重新取背景重新模糊（无法缓存），是本页最贵的一层。
+       见 docs/frontend-audit.md 的 P-04。 */
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     /* 均匀底色（不能用 145deg 渐变：亮端会落在顶边形成一条亮线） */
     background-color: rgba(255, 255, 255, 0.76);
     background-image: none;
@@ -1921,8 +1917,6 @@
     border: 0;
     box-shadow: 0 -14px 34px -18px rgba(0, 0, 0, 0.28);
 }
-
-
 
 /* 最大化/全屏时窗口本身是直角，圆角裁剪也要撤掉 */
 .app-shell.maximized,
@@ -1943,7 +1937,6 @@
     border-radius: 0;
     clip-path: none;
 }
-
 
 /* ===== 歌词页打开时：外壳的亚克力白边要收掉 =====
    外壳（.app-shell）的白色描边 + 四边内高光是亚克力"厚度"的来源，但在浅色主界面上几乎看不出；
@@ -2033,7 +2026,6 @@
     transform: translateX(20px);
 }
 
-
 /* Home 页播放条：顶角改直角。
    它上方紧贴内容面板，15px 圆角会让左上/右上各露出一个背景缺口（看起来"多了两个角"）。
    歌词页底栏按需求仍是上 15px / 下 35px，由 .lyrics-footer .bottom-player 覆盖。 */
@@ -2043,7 +2035,6 @@
         0 round 0 0 calc(var(--player-radius-bottom) - 1px) calc(var(--player-radius-bottom) - 1px)
     );
 }
-
 
 /* ===== 播放中：封面流中心卡片的边框高亮光效 =====
    动画只跑 opacity（合成层，不用重绘 box-shadow），静态态本身就是一圈高亮边框。
@@ -2073,13 +2064,11 @@
     transition: none; /* 逐帧写值期间不能带过渡，否则每帧都重启一次 520ms 过渡 */
 }
 
-
 @media (prefers-reduced-motion: reduce) {
     .app-shell.playing .cf-card.cf-active::after {
         opacity: 0.85;
     }
 }
-
 
 /* ===== 低功耗模式（设置页开关，默认关闭）=====
    为什么是"减层 / 去动画 / 去实时模糊"，而不是"降分辨率"：
@@ -2110,345 +2099,10 @@
 .app-shell.low-power .home-ambient {
     display: none;
 }
-
-.app-shell.low-power .lyrics-page .bg {
-    animation: none;
-    filter: blur(18px) saturate(1.04) brightness(0.8);
-}
-
-.app-shell.low-power .lyrics-page .bg-tint,
-.app-shell.low-power .lyrics-page .grain {
-    display: none;
-}
-
-.app-shell.low-power .lyrics-page .ambient {
-    animation: none;
-}
-
-.app-shell.low-power .lyrics-page .lyrics-scrim,
-.app-shell.low-power .lyrics-page .player {
-    will-change: auto;
-}
-
-.app-shell.low-power .lyrics-page .glass {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-}
-
-/* ===== 低功耗模式的歌词页：白底黑字 + 左海报 / 右歌词 =====
-   不再使用封面虚化背景，因此也不需要深色页面上那套白字与暖色光晕；
-   底栏播放条同色系（白底 + 深色控件），避免"固定黑条 + 鲜艳封面"的突兀感。 */
-.app-shell.low-power .lyrics-page .player,
-.app-shell.low-power .lyrics-page .lyrics-scrim,
-.app-shell.low-power .lyrics-page .lyrics-veil {
-    background: #FFFFFF;
-}
-
-/* 低功耗的歌词页是"实色底"，不需要设计稿那圈白色描边（白底上看不见，进了夜间配色就是白边） */
-.app-shell.low-power .lyrics-page .player {
-    border: 0;
-}
-
-.app-shell.low-power .lyrics-page .bg,
-.app-shell.low-power .lyrics-page .bg-tint,
-.app-shell.low-power .lyrics-page .ambient,
-.app-shell.low-power .lyrics-page .vignette,
-.app-shell.low-power .lyrics-page .grain {
-    display: none;
-}
-
-.app-shell.low-power .lyrics-page .topbar {
-    left: 40px;
-    right: 40px;
-    top: 30px;
-}
-
-/* 顶栏只留返回按钮：封面/歌名已挪到左侧海报（两种模式一致）；「沉浸」只在低功耗下隐藏 */
-.app-shell .lyrics-page .track-pill {
-    background: none;
-    border: none;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    padding: 0;
-}
-
-.app-shell .lyrics-page .track-pill .cover-mini,
-.app-shell .lyrics-page .track-pill .track-meta {
-    display: none;
-}
-
-.app-shell.low-power .lyrics-page .top-actions {
-    display: none;
-}
-
-.app-shell.low-power .lyrics-page .back {
-    color: var(--color-text-primary);
-    background: rgba(0, 0, 0, 0.05);
-}
-
-.app-shell.low-power .lyrics-page .back:hover {
-    background: rgba(0, 0, 0, 0.1);
-}
-
-.app-shell .lyrics-page .lp-poster {
-    position: absolute;
-    left: 7%;
-    top: 50%;
-    width: min(32vw, 400px);
-    transform: translateY(-50%);
-    z-index: 5;
-}
-
-.app-shell .lyrics-page .lp-poster-cover {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    border-radius: 35px;
-    overflow: hidden;
-    /* ⚠️ 容器**不要**铺浅色底（#F2F2F5）。圆角裁剪是抗锯齿的，容器底色会沿着边缘漏出
-       一条 1px 亮线 —— 在深色歌词页上就是用户看到的"封面一圈白边"（左侧直边 + 圆角弧线上
-       都有）。实测：加背景时该线可见，去掉后完全消失。占位底色只留给没有封面的情况。 */
-    background: transparent;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.16);
-    display: grid;
-    place-items: center;
-}
-
-/* 没有封面时才铺占位底色（配合 ♪ 占位字形）。
-   ⚠️ 底色要分模式：默认歌词页是深色，铺 --color-surface-secondary(#F2F2F5) 会是一块刺眼的白方块；
-   浅灰只适合低功耗的白色页面（夜间低功耗那条在 .theme-dark 段里另有覆盖）。 */
-.app-shell .lyrics-page .lp-poster-cover.is-empty {
-    background: rgba(255, 255, 255, 0.08);
-}
-
-.app-shell.low-power .lyrics-page .lp-poster-cover.is-empty {
-    background: var(--color-surface-secondary);
-}
-
-.app-shell .lyrics-page .lp-poster-cover img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    /* 圆角直接落在图片自己身上：这样即使容器的裁剪边缘有抗锯齿像素，也没有底色可漏 */
-    border-radius: inherit;
-}
-
-.app-shell .lyrics-page .lp-poster-glyph {
-    font-size: 46px;
-    color: var(--color-text-tertiary);
-}
-
-.app-shell .lyrics-page .lp-poster-title {
-    margin-top: 22px;
-    font-size: 22px;
-    font-weight: 650;
-    letter-spacing: -0.3px;
-    color: rgba(255, 255, 255, 0.95);
-}
-
-.app-shell .lyrics-page .lp-poster-artist {
-    margin-top: 6px;
-    font-size: 14px;
-    color: rgba(255, 255, 255, 0.55);
-}
-
-.app-shell.low-power .lyrics-page .lp-poster-title { color: var(--color-text-primary); }
-.app-shell.low-power .lyrics-page .lp-poster-artist { color: var(--color-text-tertiary); }
-
-/* 歌词列：占满右侧剩余宽度、**全部左对齐**（默认模式是居中排版，直接继承会"组内居中 + 大片空白"），
-   长行改换行而不是被裁掉（wrap 比跑马灯便宜得多，也不会让几十行同时动起来）。 */
-.app-shell .lyrics-page .lyrics-area {
-    left: 52%;
-    right: 5%;
-    justify-content: flex-start;
-}
-
-.app-shell .lyrics-page .lyrics {
-    width: 100%;
-    text-align: left;
-    justify-content: flex-start;
-}
-
-.app-shell .lyrics-page .lyrics-track {
-    align-items: flex-start;
-    width: 100%;
-}
-
-.app-shell .lyrics-page .lyric-group {
-    align-items: flex-start;
-    text-align: left;
-    width: 100%;
-}
-
-/* 排版（宽度 / 换行 / 左对齐 / 字号）两种模式共用：默认那档字号在宽窗口里每行只占一半宽度，
-   右侧空一大片，所以统一放大到 21~34px；颜色仍按模式分别定义。 */
-.app-shell .lyrics-page .line {
-    max-width: 100%;
-    white-space: normal;
-    text-align: left;
-    font-size: calc(clamp(21px, 1.95vw, 34px) * var(--lyric-size, 1));
-    /* 显式再声明一次字体族：这条规则的特异性比设计稿的 `.lyrics-page .line` 高，
-       把 --lyric-font（内联设在歌词页根上：英文字体在前、中文字体在后）原样带上，
-       确保"我的排版覆盖"不会以任何方式洗掉用户设置的字体。 */
-    font-family: var(--lyric-font, inherit);
-}
-
-.app-shell .lyrics-page .lyric-group.active .line.active {
-    font-size: calc(clamp(34px, 3vw, 52px) * var(--lyric-size, 1));
-}
-
-/* ===== 歌词页布局切换（右上角按钮）=====
-   默认（无 .layout-center）= 现在的「左封面 + 右歌词」；.layout-center = 设计稿原来的
-   「无封面 + 歌词居中」。两者共用 .lyrics-area（inset:0），切换时只改 left/right 与对齐，
-   所以下面这几条是对上面那组"海报版排版"的覆盖（特异性更高、位置更靠后）。 */
-.app-shell .lyrics-page .top-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-/* 单独一颗的布局按钮：尺寸/材质对齐隔壁那颗 .icon-btn，但不带它"组内分隔线"的设定 */
-.app-shell .lyrics-page .layout-btn {
-    width: 46px;
-    height: 46px;
-    border-radius: 16px;
-    display: grid;
-    place-items: center;
-    cursor: pointer;
-    color: rgba(255, 255, 255, 0.88);
-    transition: background var(--transition-fast), color var(--transition-fast);
-}
-
-.app-shell .lyrics-page .layout-btn:hover {
-    background: rgba(255, 255, 255, 0.16);
-}
-
-/* 过场：只动 opacity / transform（合成层属性）。这里**不能**去过渡 left/right ——
-   那会让整列歌词逐帧重新换行，几十行同排的代价很高。 */
-.app-shell .lyrics-page .lyrics-area,
-.app-shell .lyrics-page .lp-poster {
-    transition: opacity 200ms ease, transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* 切换中（默认模式）：歌词与海报一起淡出，等 JS 换完布局再淡回 */
-.app-shell .lyrics-page.switching .lyrics-area {
-    opacity: 0;
-    transition-duration: 130ms;
-}
-
-.app-shell .lyrics-page.switching .lp-poster {
-    opacity: 0;
-    transform: translateY(-50%) translateX(-26px) scale(0.97);
-    transition-duration: 130ms;
-}
-
-/* 居中版：海报退场（保留在 DOM 里只做淡出，不 display:none，才能有过渡） */
-.app-shell .lyrics-page.layout-center .lp-poster {
-    opacity: 0;
-    transform: translateY(-50%) translateX(-26px) scale(0.97);
-    pointer-events: none;
-}
-
-.app-shell .lyrics-page.layout-center .lyrics-area {
-    left: 0;
-    right: 0;
-    justify-content: center;
-}
-
-.app-shell .lyrics-page.layout-center .lyrics {
-    width: min(780px, 72vw);
-    text-align: center;
-    justify-content: center;
-}
-
-.app-shell .lyrics-page.layout-center .lyrics-track {
-    align-items: center;
-    width: auto;
-}
-
-.app-shell .lyrics-page.layout-center .lyric-group {
-    align-items: center;
-    text-align: center;
-    width: auto;
-}
-
-/* 长句仍然换行：设计稿的 white-space:nowrap 会把长句裁掉，这里保留"换行"这条改进 */
-.app-shell .lyrics-page.layout-center .line {
-    max-width: 730px;
-    text-align: center;
-}
-
-/* 低功耗：入场也不做分层错峰动画 —— 那三层各是一次"大半窗的合成动画"，
-   与整体的 opacity 淡入叠加后仍是额外开销。低功耗只保留一次整体淡入。 */
-.app-shell.low-power .lyrics-page.staged .topbar,
-.app-shell.low-power .lyrics-page.staged .lyrics-area,
-.app-shell.low-power .lyrics-page.staged .lyrics-footer {
-    animation: none;
-}
-
-/* 低功耗：布局切换一律不做动效（用户要求）；按钮也换成低功耗那套配色 */
-.app-shell.low-power .lyrics-page .lyrics-area,
-.app-shell.low-power .lyrics-page .lp-poster {
-    transition: none !important;
-}
-
-.app-shell.low-power .lyrics-page .layout-btn {
-    color: var(--color-text-primary);
-    background: rgba(0, 0, 0, 0.05);
-}
-
-.app-shell.low-power .lyrics-page .layout-btn:hover {
-    background: rgba(0, 0, 0, 0.1);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .layout-btn {
-    color: rgba(255, 255, 255, 0.92);
-    background: rgba(255, 255, 255, 0.10);
-}
-
-.app-shell.low-power .lyrics-page .line {
-    color: rgba(0, 0, 0, 0.22);
-    text-shadow: none;
-    font-family: var(--lyric-font, inherit);
-}
-
-/* ⚠️ 正在唱的那一组里，翻译行是 .line:not(.active) —— 它会继承上面那条"未唱浅灰"，
-   结果当前句的翻译几乎看不见（实测反馈）。这里单独加深。 */
-.app-shell.low-power .lyrics-page .lyric-group.active .line:not(.active) {
-    color: rgba(0, 0, 0, 0.72);
-}
-
-.app-shell.low-power .lyrics-page .line.near {
-    color: rgba(0, 0, 0, 0.45);
-}
-
-.app-shell.low-power .lyrics-page .line.active {
-    color: rgba(0, 0, 0, 0.92);
-    text-shadow: none;
-}
-
-.app-shell.low-power .lyrics-page .line.active .karaoke-base {
-    color: rgba(0, 0, 0, 0.28);
-}
-
-.app-shell.low-power .lyrics-page .line.active .karaoke-fill {
-    color: #111111;
-}
-
-.app-shell.low-power .lyrics-page .lyrics-note,
-.app-shell.low-power .lyrics-page .lyrics-empty .glyph,
-.app-shell.low-power .lyrics-page .lyrics-empty .sub {
-    color: var(--color-text-tertiary);
-}
-
-.app-shell.low-power .lyrics-page .lyrics-empty .title {
-    color: var(--color-text-primary);
-}
-
+/* 低功耗歌词页底栏：白底 + 深色控件（页身已改写为 sl-* 系列，配色见 lyrics.css） */
 .app-shell.low-power .lyrics-page .lyrics-footer .bottom-player {
     background: #FFFFFF;
-    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    border: 0;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     box-shadow: none;
@@ -2617,75 +2271,9 @@
     --wp-active: #FFFFFF;
 }
 
-/* ③ 歌词页（原来只做了这一块，现在与主界面同一套夜配色） */
-.app-shell.low-power.theme-dark .lyrics-page .player,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-scrim,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-veil {
-    background: #131316;
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .back {
-    color: rgba(255, 255, 255, 0.92);
-    background: rgba(255, 255, 255, 0.10);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .back:hover {
-    background: rgba(255, 255, 255, 0.18);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lp-poster-title {
-    color: rgba(255, 255, 255, 0.95);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lp-poster-artist {
-    color: rgba(255, 255, 255, 0.5);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lp-poster-cover.is-empty {
-    background: rgba(255, 255, 255, 0.07);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lp-poster-glyph {
-    color: rgba(255, 255, 255, 0.35);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .line {
-    color: rgba(255, 255, 255, 0.24);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyric-group.active .line:not(.active) {
-    color: rgba(255, 255, 255, 0.72);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .line.near {
-    color: rgba(255, 255, 255, 0.46);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .line.active {
-    color: rgba(255, 255, 255, 0.97);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .line.active .karaoke-base {
-    color: rgba(255, 255, 255, 0.34);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .line.active .karaoke-fill {
-    color: #FFFFFF;
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-note,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-empty .glyph,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-empty .sub {
-    color: rgba(255, 255, 255, 0.45);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-empty .title {
-    color: rgba(255, 255, 255, 0.92);
-}
-
 .app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .bottom-player {
     background: #1B1B1F;
-    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border: 0;
 }
 
 .app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .bottom-player,
@@ -2711,11 +2299,6 @@
 
 .app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .player-track-artist {
     color: rgba(255, 255, 255, 0.5);
-}
-
-
-.app-shell .lyrics-page .lyric-group {
-    filter: none !important;
 }
 
 /* ===== 低功耗：卡片改成「最普通的卡片」 =====
@@ -2762,7 +2345,13 @@
 .app-shell.win-blur .spinner,
 .app-shell.lyrics-covered .cf-card.cf-active::after,
 .app-shell.lyrics-covered .cf-meta .marquee .marquee-track,
-.app-shell.lyrics-covered .spinner {
+.app-shell.lyrics-covered .spinner,
+/* ③ 窗口最小化 / 收进托盘（.win-hidden）：整窗根本不在屏幕上。
+   这一条以前缺 —— win-blur 只管"失焦"，最小化时窗口往往还保持焦点，
+   于是 spinner 这类无限动画在完全看不见时照样按刷新率跑。 */
+.app-shell.win-hidden .cf-card.cf-active::after,
+.app-shell.win-hidden .cf-meta .marquee .marquee-track,
+.app-shell.win-hidden .spinner {
     animation-play-state: paused;
 }
 
@@ -2780,7 +2369,6 @@
    绘制结果，重新可见时要重画一帧。低功耗模式下主界面本来是静止的（光雾已关、光晕/波形已停），
    静态内容的绘制成本≈0，所以整条规则删掉，用体验换那一点点收益不划算。 */
 
-
 /* 槽位行里的删除按钮：与上传按钮同款，仅用红色区分意图；不可删时置灰 */
 .lf-icon-btn.lf-del:hover:not(:disabled) {
     color: #e06c6c;
@@ -2790,4 +2378,64 @@
 .lf-icon-btn:disabled {
     opacity: 0.35;
     cursor: default;
+}
+
+/* ===== 渲染异常兜底（src/components/ErrorBoundary.tsx）=====
+   样式故意做得「安静」：出故障时用户最先要的是能读到发生了什么 + 一个明确的出口，
+   不是一张抢眼的报错弹窗。整屏版铺满窗口，内联版占据 main-content 的位置。 */
+.crash-screen {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: grid;
+    place-items: center;
+    background: var(--color-background);
+    padding: 24px;
+}
+
+.crash-inline {
+    margin: 48px auto 0;
+    width: min(420px, 100%);
+    padding: 22px 24px;
+    border-radius: 16px;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-panel);
+    text-align: center;
+}
+
+.crash-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.crash-msg {
+    margin-top: 8px;
+    max-height: 110px;
+    overflow: auto;
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: var(--color-text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    /* 只有这段文字可能很长（组件栈/异常信息），给它独立滚动，别把按钮挤出视口 */
+    overscroll-behavior: contain;
+}
+
+.crash-actions {
+    margin-top: 16px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+}
+
+.crash-primary {
+    background: var(--color-text-primary);
+    border-color: var(--color-text-primary);
+    color: var(--color-surface);
+}
+
+.crash-primary:hover:not(:disabled) {
+    background: #000000;
 }

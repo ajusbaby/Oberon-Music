@@ -7,7 +7,8 @@ import { Cover } from "./Cover";
 import { albumLabel } from "../lib/format";
 import { MarqueeText } from "./MarqueeText";
 import { frameBudget } from "../lib/frameBudget";
-import { isWinFocused } from "../lib/winFocus";
+import { isWinFocused, isWindowInvisible, onWindowVisibilityChange } from "../lib/winFocus";
+import { useUiStore } from "../stores/uiStore";
 
 // —— 设计稿常量（勿改） ——
 const W = 224;
@@ -54,6 +55,29 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
     suppressUntil: 0,
   });
   const wheelLockRef = useRef(false);
+
+  // 切卡期间才需要合成层提升：给 .cf-perspective 挂 900ms 的 .cf-animating，
+  // 让 will-change 只在这段窗口内生效。常驻 will-change 会让每张卡（各带一层
+  // backdrop-filter）常年占一个合成层，静止时纯属白占显存与合成带宽。
+  const [animating, setAnimating] = useState(false);
+  const animTimerRef = useRef<number | null>(null);
+
+  // 中心索引一变（用户切卡 / 跟随播放 / 列表重排）就开一个 900ms 的动画窗口
+  useEffect(() => {
+    setAnimating(true);
+    if (animTimerRef.current !== null) window.clearTimeout(animTimerRef.current);
+    animTimerRef.current = window.setTimeout(() => {
+      animTimerRef.current = null;
+      setAnimating(false);
+    }, 900);
+  }, [centerIndex]);
+
+  useEffect(
+    () => () => {
+      if (animTimerRef.current !== null) window.clearTimeout(animTimerRef.current);
+    },
+    []
+  );
 
   // 专辑数量变化时收敛索引，并把选中项同步给上层
   useEffect(() => {
@@ -177,11 +201,17 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
   }, [total]);
 
   // 键盘左右切换（输入框聚焦时不响应，与设计稿一致）
+  // ⚠️ 与 App.tsx 的全局 ←/→ 是同一按键的两处监听：App 在首页会让路（见那边的注释），
+  // 但被歌词页/对话框盖住时首页仍是"当前视图"，此时方向键归 App（切歌）——这里必须让开，
+  // 否则会去移动看不见的卡片，还会在 0.42s 后把整个队列换成那张专辑。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement;
-      const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+      const typing =
+        !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
       if (typing) return;
+      const ui = useUiStore.getState();
+      if (ui.lyricsOpen || ui.dialog) return;
       if (e.key === "ArrowLeft") move(-1);
       else if (e.key === "ArrowRight") move(1);
     };
@@ -197,14 +227,32 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
     return Array.from({ length: span }, (_, k) => start + k);
   }, [albums, centerIndex, total]);
 
+  // 被歌词页/对话框盖住时整个循环不启动：首页仍挂在下面，但没人看得见这些卡片。
+  // （歌词页是"全屏毛玻璃 + 逐帧滚动"的最重场景，不该再叠一条看不见的循环。）
+  const covered = useUiStore((s) => s.lyricsOpen || !!s.dialog);
+
   // 播放中的光晕脉冲：原来是一条 3.4s 的 CSS 无限动画（合成器按刷新率跑，绕过帧预算）。
   // 现在由受控 rAF 写 CSS 变量 --cf-glow —— 只有 opacity 变化（走合成层），60fps 上限，
   // 失焦/隐藏/暂停时不写值（= 不产帧）。观感与原动画一致（0.62 到 1 的呼吸）。
   useEffect(() => {
+    if (covered) return; // 被盖住：不注册 rAF
     const PERIOD = 3400;
     let raf = 0;
     let curEl: HTMLElement | null = null;
     let curV = -1;
+    /**
+     * 读跑马灯时长（秒）。
+     * ⚠️ 不能用 getComputedStyle：它要求样式是最新的，而上一帧刚写过 tr.style.transform，
+     * 样式一脏就会在这里触发一次**全文档样式重算**（每帧一次，与视口无关）。
+     * MarqueeText 把时长写成行内变量（--marquee-duration）挂在 .marquee 上，
+     * 读 element.style 是纯行内声明读取，不参与样式解析 —— 既准确又零开销。
+     */
+    const durationOf = (tr: HTMLElement): number => {
+      const host = tr.parentElement;
+      const raw = host ? host.style.getPropertyValue("--marquee-duration") : "";
+      const d = raw ? parseFloat(raw) : NaN;
+      return Number.isFinite(d) && d > 0 ? d : 9;
+    };
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       if (!frameBudget(now)) return;
@@ -212,7 +260,7 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
       if (!el) return;
       if (el !== curEl) { curEl = el; curV = -1; }
       let v = 0;
-      const visible = !document.hidden && isWinFocused();
+      const visible = !isWindowInvisible() && isWinFocused();
       if (playbackRef.current && visible) {
         const t = (now % PERIOD) / PERIOD;
         const o = 0.62 + 0.38 * (0.5 - 0.5 * Math.cos(t * Math.PI * 2));
@@ -226,15 +274,39 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
           '.cf-card.cf-active .cf-meta .marquee .marquee-track'
         );
         tracks?.forEach((tr) => {
-          const d = parseFloat(getComputedStyle(tr).getPropertyValue('--marquee-duration')) || 9;
+          const d = durationOf(tr);
           const p = ((now / 1000) % d) / d;
           tr.style.transform = 'translateX(' + (-50 * p).toFixed(3) + '%)';
         });
       }
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
+    // 失焦/隐藏时直接停掉 rAF（而不是在回调里早退）：没人看的时候连一次调度都不付。
+    const start = () => {
+      if (raf === 0) raf = requestAnimationFrame(loop);
+    };
+    const stop = () => {
+      if (raf !== 0) { cancelAnimationFrame(raf); raf = 0; }
+      // 复位缓存：重新可见时按当时的元素重新取一次
+      curEl = null;
+      curV = -1;
+    };
+    const sync = () => {
+      if (!isWindowInvisible() && isWinFocused()) start();
+      else stop();
+    };
+    sync();
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    // 合并信号：document.visibilitychange + Tauri 的 win-hidden（最小化/托盘）。
+    // WebView2 最小化时不一定置 document.hidden，只监听页面会漏掉这种「根本没在屏幕上」。
+    const offVisibility = onWindowVisibilityChange(sync);
+    return () => {
+      stop();
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+      offVisibility();
+    };
+  }, [covered]);
 
   if (total === 0) return null;
 
@@ -273,7 +345,10 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
           实测（125% 缩放、同一视觉字号）：transform 版笔画发糊，zoom 版锐利。
           .cf-perspective 是 flex 居中的，所以 zoom 不需要额外补偿 margin。 */}
       <div className="cf-stage" style={{ height: 330 * stageScale }}>
-        <div className="cf-perspective" style={{ zoom: stageScale }}>
+        <div
+          className={"cf-perspective" + (animating ? " cf-animating" : "")}
+          style={{ zoom: stageScale }}
+        >
           {entries.map(({ album, index, offset }) => {
             const distance = Math.abs(offset);
             const direction = offset < 0 ? -1 : 1;
