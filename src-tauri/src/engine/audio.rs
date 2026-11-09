@@ -67,7 +67,7 @@ pub struct CoreAudio {
     sink: Option<MixerDeviceSink>,
     /// 独占输出的渲染线程句柄（None = 当前没走独占）
     exclusive: Option<ExclusiveSink>,
-    /// 播放总线：Player 接到它，「音乐厅氛围」的混响挂在它的下游。
+    /// 播放总线：Player 接到它，「空间音效」的混响挂在它的下游。
     /// 共享与独占**共用同一条 bus**，换后端时听感不会跳变。
     bus: Option<Mixer>,
     /// 上面这条 bus 当前被哪个后端拉着 —— 决定复用还是重建（HallSource 与 mixer 一一绑定）
@@ -416,7 +416,7 @@ impl CoreAudio {
         }
     }
 
-    /// 切换「音乐厅氛围」开关（设置项 concertHall）。返回是否真的变了。
+    /// 切换「空间音效」开关（设置项 concertHall）。返回是否真的变了。
     /// ⚠️ 刻意不重开设备：参数在音频线程里平滑过渡，重开反而会断一下。
     pub fn set_hall(&mut self, mode: HallMode) -> bool {
         if self.hall.mode() == mode {

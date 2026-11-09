@@ -228,7 +228,7 @@ export function SettingsView() {
     },
     [outMode, refreshOutStatus]
   );
-  // 「音乐厅氛围」：挂在播放总线上的 Freeverb 混响（设置项 concertHall，默认关闭）。
+  // 「空间音效」：挂在播放总线上的 Freeverb 混响（设置项 concertHall，默认关闭）。
   // 切换**不重开设备** —— 参数在音频线程里平滑过渡，正在播的歌不会被掐断。
   const [hall, setHall] = useState("off");
   useEffect(() => {
@@ -247,10 +247,10 @@ export function SettingsView() {
       setHall(mode);
       try {
         await audioSetConcertHall(mode);
-        toast(mode === "off" ? "已关闭音乐厅氛围" : "已开启音乐厅氛围", "success");
+        toast(mode === "off" ? "已关闭空间音效" : "已开启空间音效", "success");
       } catch (e) {
         setHall(prev);
-        toast("切换音乐厅氛围失败：" + String(e), "error");
+        toast("切换空间音效失败：" + String(e), "error");
       }
     },
     [hall]
@@ -441,14 +441,14 @@ export function SettingsView() {
             </div>
           ))}
         </div>
-        <div className="section-title">音乐厅氛围</div>
+        <div className="section-title">空间音效</div>
         <div className="settings-block">
           <div className="settings-row">
             <div className="settings-row-main">
               <div className="settings-label">混响空间</div>
               <div className="settings-hint">
                 {hallOn
-                  ? "已开启：所有曲目共用一个「厅」，切歌不断尾巴"
+                  ? "已开启：所有曲目共用一个声场，切歌不断尾巴"
                   : "已关闭（默认）：输出原始信号"}
               </div>
             </div>

@@ -75,7 +75,7 @@ pub async fn audio_set_output_mode(state: State<'_, Arc<AppState>>, mode: String
     Ok(())
 }
 
-/// 设置键：「音乐厅氛围」开关（on / off；缺键 = off）
+/// 设置键：「空间音效」开关（on / off；缺键 = off）
 pub const KEY_CONCERT_HALL: &str = "concertHall";
 
 /// 读取当前混响开关（缺键或脏值一律回落到 off）

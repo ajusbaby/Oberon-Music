@@ -205,7 +205,7 @@ pub fn run() {
             commands::audio::audio_set_output_mode,
             commands::audio::audio_output_status,
             commands::audio::audio_retry_output,
-            // 「音乐厅氛围」混响档位
+            // 「空间音效」混响档位
             commands::audio::audio_concert_hall,
             commands::audio::audio_set_concert_hall,
             // 设置

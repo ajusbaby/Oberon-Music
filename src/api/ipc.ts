@@ -48,11 +48,11 @@ export async function audioSetOutputMode(mode: string): Promise<void> {
 export async function audioRetryOutput(): Promise<void> {
   return invoke("audio_retry_output");
 }
-/** 读取「音乐厅氛围」开关（on / off） */
+/** 读取「空间音效」开关（on / off） */
 export async function audioConcertHall(): Promise<string> {
   return invoke("audio_concert_hall");
 }
-/** 设置「音乐厅氛围」开关；不重开设备，混响在总线上即时切换 */
+/** 设置「空间音效」开关；不重开设备，混响在总线上即时切换 */
 export async function audioSetConcertHall(mode: string): Promise<void> {
   return invoke("audio_set_concert_hall", { mode });
 }
