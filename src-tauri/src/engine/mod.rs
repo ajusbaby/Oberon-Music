@@ -13,6 +13,7 @@ pub mod beat;
 pub mod downmix;
 pub mod dsd;
 pub mod exclusive;
+pub mod exclusive_session;
 pub mod hall;
 pub mod opus;
 pub mod resample;
@@ -65,6 +66,13 @@ pub enum EngineCommand {
     /// 切换「空间音效」开关（设置项 concertHall）。
     /// 不重开设备：混响挂在总线上，参数由音频线程平滑过渡。
     SetConcertHall { mode: crate::engine::hall::HallMode },
+    /// 设置独占输出的两个策略（设置项 exclusiveVolume / exclusiveRate）。
+    /// 音量策略立刻生效（改的是渲染线程的目标增益）；
+    /// 采样率策略变了必须重开 —— 采样率是**建 mixer 之前**就定死的。
+    SetExclusiveOutput {
+        volume: crate::engine::exclusive_session::VolumeMode,
+        rate: crate::engine::exclusive_session::RatePolicy,
+    },
     /// 停止引擎线程（预留：应用退出时显式收尾）
     #[allow(dead_code)]
     Shutdown,
@@ -516,6 +524,12 @@ fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandl
         EngineCommand::SetConcertHall { mode } => {
             // 同样不 sync：混响档位不进 PlayerState 快照，改了也不影响播放状态
             ctx.core.set_hall(mode);
+        }
+        EngineCommand::SetExclusiveOutput { volume, rate } => {
+            // 只有采样率策略变化才需要重开；音量策略在 set_exclusive_output 里已即时生效
+            if ctx.core.set_exclusive_output(volume, rate) {
+                remigrate_output(ctx, app, shared);
+            }
         }
         EngineCommand::SetPreviousRestart { enabled } => {
             // 全文件唯一一个不调 sync_shared 的非空分支：该偏好不进 PlayerState 快照、

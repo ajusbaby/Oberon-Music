@@ -205,6 +205,9 @@ pub fn run() {
             commands::audio::audio_set_output_mode,
             commands::audio::audio_output_status,
             commands::audio::audio_retry_output,
+            // 独占输出的两个策略（音量落点 / 采样率锁定）
+            commands::audio::audio_exclusive_output,
+            commands::audio::audio_set_exclusive_output,
             // 「空间音效」混响档位
             commands::audio::audio_concert_hall,
             commands::audio::audio_set_concert_hall,

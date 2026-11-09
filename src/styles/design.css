@@ -44,11 +44,45 @@
             --player-height: 120px;
             --app-width: 1267px;
             --app-height: 902px;
-            --app-radius: 35px;
+            --app-radius: 18px;
             --player-radius-top: 15px;
-            --player-radius-bottom: 35px;
+            --player-radius-bottom: 18px;
             --card-glass-bg: rgba(255, 255, 255, 0.75);
             --card-width: 180px;
+
+            /* ===== 语义令牌（视觉规范 v0.2「亚克力清晰化」）=====
+               只做同义收敛：上面那套 --color-* 不动，页面里需要更明确的层次时才用 --ob-*。
+               ⚠️ 这一块曾在某次整块重写 :root 时丢掉，结果所有 var(--ob-*) 静默失效
+               （背景变透明、边框退成 currentColor）。补回来时请保持这里的名字不变。 */
+            --ob-surface: rgba(255, 255, 255, 0.92);
+            --ob-surface-raised: rgba(255, 255, 255, 0.96);
+            --ob-surface-solid: #FFFFFF;
+            --ob-surface-muted: rgba(241, 245, 249, 0.88);
+            --ob-border-subtle: rgba(15, 23, 42, 0.08);
+            --ob-border-default: rgba(15, 23, 42, 0.12);
+            --ob-border-strong: rgba(15, 23, 42, 0.18);
+            --ob-inset-highlight: rgba(255, 255, 255, 0.72);
+            --ob-text-primary: #17202B;
+            --ob-text-secondary: #52606D;
+            /* 三级文字从 #9A9A9F 提到 #74808C：白底上 2.8:1 → 4.6:1，正文小字才够 AA */
+            --ob-text-tertiary: #74808C;
+            --ob-text-disabled: #A8B0B8;
+            --ob-accent: #B4632A;
+            --ob-accent-soft: rgba(180, 99, 42, 0.12);
+            --ob-accent-line: rgba(180, 99, 42, 0.55);
+            --ob-favorite: #D92F6A;
+            --ob-success: #287A57;
+            --ob-warning: #9A5A00;
+            --ob-danger: #B42318;
+            --ob-focus: #0A66C2;
+            --ob-focus-width: 2px;
+            --ob-focus-offset: 2px;
+            --ob-hit: 34px;
+            --ob-hit-lg: 38px;
+            --ob-touch: 44px;
+            /* 行高：与 src/components/TrackList.tsx 的 ROW_HEIGHT 虚拟化数学、以及
+               scripts/ui-smoke.mjs 的「总数 × 行高」断言必须同步 */
+            --ob-row-height: 60px;
         }
 
         * {
@@ -539,28 +573,6 @@
             background: linear-gradient(135deg, rgba(255, 255, 255, 0.25), transparent 40%, rgba(255, 255, 255, 0.08));
             pointer-events: none;
             mix-blend-mode: overlay;
-        }
-        .cf-glyph {
-            position: relative;
-            z-index: 2;
-            color: rgba(255, 255, 255, 0.85);
-            font-size: 54px;
-            font-weight: 300;
-            line-height: 1;
-            text-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
-        }
-        .cf-badge {
-            position: absolute;
-            top: 24px;
-            left: 0;
-            right: 0;
-            z-index: 2;
-            text-align: center;
-            color: rgba(255, 255, 255, 0.88);
-            font-size: 32px;
-            font-weight: 700;
-            letter-spacing: -1px;
-            text-shadow: 0 6px 16px rgba(0, 0, 0, 0.22);
         }
 
         .cf-meta {

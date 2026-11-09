@@ -1,9 +1,10 @@
-// 导航状态：视图路由（首页 / 搜索 / 音乐库 / 专辑 / 艺术家 / 播放列表 / 设置）
+// 导航状态：视图路由（首页 / 专辑 / 音乐库 / 艺术家 / 播放列表 / 设置）
 import { create } from "zustand";
 
 export type ViewName =
   | "home"
-  | "search"
+  /** 专辑页：陈列全部专辑（搜索是独立浮层，不在这里切换状态） */
+  | "albums"
   | "library"
   | "favorites"
   | "album"
@@ -48,7 +49,7 @@ export const useNavStore = create<NavState>((set, get) => ({
 /** 便捷跳转器 */
 export const nav = {
   home: () => useNavStore.getState().go({ name: "home" }),
-  search: () => useNavStore.getState().go({ name: "search" }),
+  albums: () => useNavStore.getState().go({ name: "albums" }),
   library: (tab: string = "tracks") => useNavStore.getState().go({ name: "library", key: tab }),
   favorites: () => useNavStore.getState().go({ name: "favorites" }),
   album: (id: number) => useNavStore.getState().go({ name: "album", id }),

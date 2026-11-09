@@ -5,11 +5,12 @@ import { useNavStore, nav } from "../stores/navStore";
 import { useUiStore } from "../stores/uiStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { toast } from "../stores/uiStore";
-type PrimaryNav = "home" | "search" | "library" | "favorites";
+type PrimaryNav = "home" | "albums" | "library" | "favorites";
 
-const NAV_ITEMS: { name: PrimaryNav; label: string; icon: "home" | "search" | "library" | "heart-outline" }[] = [
+const NAV_ITEMS: { name: PrimaryNav; label: string; icon: "home" | "disc" | "library" | "heart-outline" }[] = [
   { name: "home", label: "Home", icon: "home" },
-  { name: "search", label: "Search", icon: "search" },
+  // 搜索页改为专辑页：主区陈列全部专辑，搜索能力移到顶栏（有输入即整页切到搜索结果）。
+  { name: "albums", label: "Albums", icon: "disc" },
   { name: "library", label: "Library", icon: "library" },
   // 收藏模块：与 Home / Search / Library 同属主导航，紧随 Library 之下。
   // 图标用 heart-outline（1.9 线框），与左边三枚同一套语言 —— 实心 heart 留给
@@ -19,7 +20,7 @@ const NAV_ITEMS: { name: PrimaryNav; label: string; icon: "home" | "search" | "l
 
 const GO: Record<PrimaryNav, () => void> = {
   home: nav.home,
-  search: nav.search,
+  albums: nav.albums,
   library: () => nav.library("tracks"),
   favorites: nav.favorites,
 };

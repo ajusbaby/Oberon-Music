@@ -8,12 +8,25 @@
 //! 线程模型：设备枚举、格式协商、Initialize 全部在渲染线程里做（避免 COM 接口跨线程传递），
 //! 结果通过 channel 同步回报，所以调用方能拿到明确的成功/失败与原因。
 //! ⚠️ WASAPI 基于 COM，**每个线程都要自己 initialize_mta()** —— 这里在渲染线程开头做了。
+//!
+//! 本模块只负责搬字节与记账；「该不该独占、用哪个采样率」是
+//! engine/exclusive_session.rs 的事，失败原因也按那边的 Stage 归档。
 
 use super::backend::{classify, try_open, Fallback, Fmt};
+use super::exclusive_session::{
+    Failure, GainRamp, SessionDiagnostics, SessionState, Stage, TransferStats, GAIN_TAU_SECS,
+};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use wasapi::{initialize_mta, DeviceEnumerator, Direction, ShareMode};
+
+/// 连续多少次「等待设备事件超时」才判定流真的死了。
+///
+/// 一次 200ms 等不到事件**不代表设备没了** —— 那一轮可能只是没有新周期。
+/// 早先的实现一超时就 break，结果偶发的一次调度抖动就把独占掐成静音；
+/// 这里改成连续 5 次（约 1 秒）都没动静才认定掉线，其余情况继续等。
+const MAX_CONSEC_TIMEOUTS: u32 = 5;
 
 /// f32 → 设备格式的字节。
 /// ⚠️ 24-in-32 用**左对齐**（有效位在高 24 位）—— WASAPI 对
@@ -42,6 +55,10 @@ pub struct ExclusiveSink {
     format_label: String,
     rate: u32,
     channels: usize,
+    /// 渲染线程的记账本（欠载、超时、写入失败都在里面）
+    stats: Arc<TransferStats>,
+    /// 线程退出时的第一个失败原因。比 is_alive() 多一句「为什么」。
+    failure: Arc<Mutex<Option<Failure>>>,
 }
 
 impl ExclusiveSink {
@@ -49,7 +66,8 @@ impl ExclusiveSink {
     ///
     /// - device_id：None = 系统默认设备；找不到指定设备时回退默认。
     /// - source：通常是 rodio 的 MixerSource（也就是整个播放队列的输出）。
-    /// - prefer_rate：优先尝试的采样率（一般传当前曲目的采样率）。
+    /// - gain：渲染线程逐样本乘的增益。独占时 Player 恒为 1.0，
+    ///   音量语义只在这一处，避免「Player 乘一次 + 这里再乘一次」。
     ///
     /// 失败返回 (Fallback, 原始错误)，调用方据此回退共享模式并告诉用户原因。
     /// ⚠️ 采样率必须与调用方创建 Mixer 时用的采样率**完全一致**。
@@ -62,6 +80,7 @@ impl ExclusiveSink {
         rate: u32,
         fmt: Fmt,
         channels: usize,
+        gain: Arc<GainRamp>,
     ) -> Result<Self, (Fallback, String)>
     where
         S: Iterator<Item = f32> + Send + 'static,
@@ -69,11 +88,15 @@ impl ExclusiveSink {
         let stop = Arc::new(AtomicBool::new(false));
         let played = Arc::new(AtomicU64::new(0));
         let dead = Arc::new(AtomicBool::new(false));
+        let stats = TransferStats::new();
+        let failure: Arc<Mutex<Option<Failure>>> = Arc::new(Mutex::new(None));
         let (tx, rx) = mpsc::channel::<Result<(String, u32), (Fallback, String)>>();
 
         let stop_t = stop.clone();
         let played_t = played.clone();
         let dead_t = dead.clone();
+        let stats_t = stats.clone();
+        let failure_t = failure.clone();
         let handle = std::thread::Builder::new()
             .name("oberon-wasapi-exclusive".into())
             .spawn(move || {
@@ -86,14 +109,26 @@ impl ExclusiveSink {
                     rate,
                     fmt,
                     channels,
+                    gain,
                     &stop_t,
                     &played_t,
+                    &stats_t,
                     |res| {
                         let _ = tx.send(res);
                     },
                 );
-                if let Err((f, e)) = r {
-                    eprintln!("[exclusive] 渲染线程退出: {f:?} {e}");
+                if let Err(f) = r {
+                    // 每个阶段都留痕：只在最终失败处打一行的话，
+                    // 「协商失败」和「跑起来之后掉线」会变成同一条日志。
+                    eprintln!(
+                        "[exclusive] 渲染线程退出（{}）：{} {}",
+                        f.stage.label(),
+                        f.kind.hint(),
+                        f.detail
+                    );
+                    if let Ok(mut g) = failure_t.lock() {
+                        *g = Some(f);
+                    }
                 }
                 dead_t.store(true, Ordering::SeqCst);
             })
@@ -108,6 +143,8 @@ impl ExclusiveSink {
                 format_label: label,
                 rate,
                 channels,
+                stats,
+                failure,
             }),
             Ok(Err((f, e))) => {
                 stop.store(true, Ordering::SeqCst);
@@ -148,6 +185,32 @@ impl ExclusiveSink {
     pub fn is_alive(&self) -> bool {
         !self.dead.load(Ordering::SeqCst)
     }
+
+    /// 线程退出时的第一个失败原因（还活着时为 None）。
+    /// 设置页据此把「掉了」与「为什么掉」一起显示出来。
+    pub fn failure(&self) -> Option<Failure> {
+        self.failure.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// 拼一份给设置页的诊断。state 由调用方给（它知道这次是不是用户主动关的），
+    /// 但「线程已经死了」这件事只有这里知道 —— 所以 Running 会自动降级成 Detached。
+    pub fn diagnostics(&self, state: SessionState) -> SessionDiagnostics {
+        let alive = self.is_alive();
+        let state = if state == SessionState::Running && !alive {
+            SessionState::Detached
+        } else {
+            state
+        };
+        let snap = self.stats.snapshot();
+        let fail = self.failure();
+        SessionDiagnostics::build(
+            state,
+            Some(self.format_label.clone()),
+            Some(self.rate),
+            &snap,
+            fail.as_ref(),
+        )
+    }
 }
 
 impl Drop for ExclusiveSink {
@@ -164,27 +227,29 @@ fn render_loop<S>(
     rate: u32,
     fmt: Fmt,
     channels: usize,
+    gain: Arc<GainRamp>,
     stop: &AtomicBool,
     played: &AtomicU64,
+    stats: &TransferStats,
     report: impl FnOnce(Result<(String, u32), (Fallback, String)>),
-) -> Result<(), (Fallback, String)>
+) -> Result<(), Failure>
 where
     S: Iterator<Item = f32>,
 {
-    let enumr =
-        DeviceEnumerator::new().map_err(|e| (Fallback::Other, format!("枚举设备失败: {e}")))?;
+    let enumr = DeviceEnumerator::new()
+        .map_err(|e| Failure::new(Stage::Open, Fallback::Other, format!("枚举设备失败: {e}")))?;
     let dev = match device_id {
         Some(id) => enumr
             .get_device(&id)
             .or_else(|_| enumr.get_default_device(&Direction::Render))
-            .map_err(|e| (Fallback::Other, format!("打开设备失败: {e}")))?,
-        None => enumr
-            .get_default_device(&Direction::Render)
-            .map_err(|e| (Fallback::Other, format!("打开默认设备失败: {e}")))?,
+            .map_err(|e| Failure::new(Stage::Open, Fallback::Other, format!("打开设备失败: {e}")))?,
+        None => enumr.get_default_device(&Direction::Render).map_err(|e| {
+            Failure::new(Stage::Open, Fallback::Other, format!("打开默认设备失败: {e}"))
+        })?,
     };
-    let mut client = dev
-        .get_iaudioclient()
-        .map_err(|e| (Fallback::Other, format!("取 IAudioClient 失败: {e}")))?;
+    let mut client = dev.get_iaudioclient().map_err(|e| {
+        Failure::new(Stage::Open, Fallback::Other, format!("取 IAudioClient 失败: {e}"))
+    })?;
 
     // 校验调用方指定的 (rate, fmt)：必须被**逐位**支持。不自动协商（见 start_at 的说明）
     let rate_us = rate as usize;
@@ -192,57 +257,100 @@ where
     match client.is_supported(&wf, &ShareMode::Exclusive) {
         Ok(None) => {}
         Ok(Some(_)) => {
-            return Err((
+            return Err(Failure::new(
+                Stage::Inspect,
                 Fallback::UnsupportedFormat,
                 format!("{rate}/{} 只能近似支持，不能 bit-perfect", fmt.label()),
             ))
         }
-        Err(e) => return Err((Fallback::UnsupportedFormat, e.to_string())),
+        Err(e) => {
+            return Err(Failure::new(
+                Stage::Inspect,
+                Fallback::UnsupportedFormat,
+                e.to_string(),
+            ))
+        }
     }
 
-    let _period = try_open(&mut client, rate_us, fmt, channels).map_err(|e| (classify(&e), e))?;
+    let _period = try_open(&mut client, rate_us, fmt, channels)
+        .map_err(|e| Failure::new(Stage::Inspect, classify(&e), e))?;
     let event = client
         .set_get_eventhandle()
-        .map_err(|e| (classify(&e.to_string()), e.to_string()))?;
+        .map_err(|e| Failure::new(Stage::Start, classify(&e.to_string()), e.to_string()))?;
     let render = client
         .get_audiorenderclient()
-        .map_err(|e| (classify(&e.to_string()), e.to_string()))?;
+        .map_err(|e| Failure::new(Stage::Start, classify(&e.to_string()), e.to_string()))?;
     let buf_frames = client
         .get_buffer_size()
-        .map_err(|e| (classify(&e.to_string()), e.to_string()))? as usize;
+        .map_err(|e| Failure::new(Stage::Start, classify(&e.to_string()), e.to_string()))?
+        as usize;
     client
         .start_stream()
-        .map_err(|e| (classify(&e.to_string()), e.to_string()))?;
+        .map_err(|e| Failure::new(Stage::Start, classify(&e.to_string()), e.to_string()))?;
 
+    stats.note_buffer(buf_frames as u32);
     report(Ok((format!("{rate}/{}", fmt.label()), rate as u32)));
 
     let bpf = fmt.bytes_per_frame(channels);
     let mut bytes: Vec<u8> = Vec::with_capacity(buf_frames * bpf);
     let mut frames: u64 = 0;
+    // 增益平滑系数按本次真实采样率算（换率就是换设备，各自算各自的）
+    let k = GainRamp::coeff(rate, GAIN_TAU_SECS);
+    // 起点直接取目标值：开流那一刻不该有渐入，只有之后的改动才需要平滑
+    let mut cur_gain = gain.target();
+
     while !stop.load(Ordering::SeqCst) {
-        if event.wait_for_event(200).is_err() {
-            break;
+        match event.wait_for_event(200) {
+            Ok(()) => stats.note_event(),
+            Err(e) => {
+                let n = stats.note_timeout();
+                if n >= MAX_CONSEC_TIMEOUTS {
+                    return Err(Failure::new(
+                        Stage::Run,
+                        Fallback::DeviceInvalidated,
+                        format!("连续 {n} 次等待设备事件超时：{e}"),
+                    ));
+                }
+                // 单次超时继续等：这一轮没有新周期而已，流还活着
+                continue;
+            }
         }
         let Ok(free) = client.get_available_space_in_frames() else {
-            break;
+            return Err(Failure::new(
+                Stage::Run,
+                Fallback::DeviceInvalidated,
+                "查询可用空间失败",
+            ));
         };
         if free == 0 {
+            // 设备缓冲满：我们喂得比它放得快。这是正常背压，不是错误 ——
+            // 记一笔就回去等下一个事件（wait_for_event 会阻塞，不会空转烧 CPU）。
+            stats.note_zero_space();
             continue;
         }
+        stats.note_free(free as u64);
         bytes.clear();
         for _ in 0..free {
             for _ in 0..channels {
                 // 源结束（或混音器 keep-alive）时补静音：写静音而不停流，
                 // 这样引擎照旧用 player_empty() 判断自然结束，行为与共享模式一致
                 let v = source.next().unwrap_or(0.0);
-                push_sample(&mut bytes, v, fmt);
+                // 增益在这里乘，且逐样本平滑：改音量不会有「咔」的一声
+                cur_gain = gain.step(cur_gain, k);
+                push_sample(&mut bytes, v * cur_gain, fmt);
             }
         }
-        if render.write_to_device(free as usize, &bytes, None).is_err() {
-            break;
+        if let Err(e) = render.write_to_device(free as usize, &bytes, None) {
+            stats.note_write_error();
+            return Err(Failure::new(
+                Stage::Run,
+                classify(&format!("{e:?}")),
+                format!("{e:?}"),
+            ));
         }
         frames += free as u64;
         played.store(frames, Ordering::Relaxed);
+        stats.add_frames(free as u64);
     }
     let _ = client.stop_stream();
     Ok(())
@@ -279,5 +387,21 @@ mod tests {
         assert_eq!(Fmt::int(16, 16).bytes_per_frame(2), 4);
         assert_eq!(Fmt::int(32, 24).bytes_per_frame(2), 8);
         assert_eq!(Fmt::float(32).bytes_per_frame(1), 4);
+    }
+
+    /// 增益必须真的作用到样本上，且 0 增益是**静音**而不是「跳过写」
+    /// （跳过写会让设备欠载，听感上是断音）
+    #[test]
+    fn gain_is_applied_before_quantization() {
+        let g = GainRamp::new(0.5);
+        let k = GainRamp::coeff(44_100, GAIN_TAU_SECS);
+        // 起点就是目标值 ⇒ step 不动，避免首帧渐入
+        let cur = g.step(g.target(), k);
+        assert_eq!(cur, 0.5);
+        let mut v = Vec::new();
+        push_sample(&mut v, 1.0 * cur, Fmt::int(16, 16));
+        // int16 走对称量化（×32767），所以 0.5 落在 16383 而不是 16384 —— 
+        // 这样 +1.0 才刚好是 32767，不会溢出成负数
+        assert_eq!(v, vec![0xFF, 0x3F], "0.5 满幅应该是一半量程");
     }
 }

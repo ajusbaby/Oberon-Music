@@ -6,12 +6,14 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import type { AudioDeviceInfo, ExclusiveDeviceCaps, OutputStatus, PlayMode } from "../api/types";
 import {
   audioConcertHall,
+  audioExclusiveOutput,
   audioExclusiveProbe,
   audioOutputDevices,
   audioOutputMode,
   audioOutputStatus,
   audioRetryOutput,
   audioSetConcertHall,
+  audioSetExclusiveOutput,
   audioSetOutputDevice,
   audioSetOutputMode,
 } from "../api/ipc";
@@ -266,6 +268,39 @@ export function SettingsView() {
     }
   }, []);
 
+  // 独占的两个策略：音量落在哪、采样率听谁的。
+  // 音量改了立刻生效（渲染线程里平滑过渡）；采样率改了要重开输出，所以顺带刷新一次状态。
+  const [exVolume, setExVolume] = useState("software");
+  const [exRate, setExRate] = useState("adaptive");
+  useEffect(() => {
+    void (async () => {
+      try {
+        const s = await audioExclusiveOutput();
+        setExVolume(s.volume);
+        setExRate(s.rate);
+      } catch {
+        /* 读不到就保持默认（软件音量 / 跟随曲目） */
+      }
+    })();
+  }, []);
+  const changeExclusive = useCallback(
+    async (volume: string, rate: string) => {
+      const prevVolume = exVolume;
+      const prevRate = exRate;
+      setExVolume(volume);
+      setExRate(rate);
+      try {
+        await audioSetExclusiveOutput(volume, rate);
+        await refreshOutStatus();
+      } catch (e) {
+        setExVolume(prevVolume);
+        setExRate(prevRate);
+        toast("设置独占参数失败：" + String(e), "error");
+      }
+    },
+    [exVolume, exRate, refreshOutStatus]
+  );
+
   // 歌词排版：字号 / 字重 / 纯汉字行的语言归属。
   // 字体本身不再可配置 —— 固定走系统字体（原因见 src/lib/lyricFont.ts 头部注释）。
   const lyricSize = readSize(settings);
@@ -385,6 +420,13 @@ export function SettingsView() {
               {outStatus?.fallback ? (
                 <div className="settings-hint warn">回退原因：{outStatus.fallback}</div>
               ) : null}
+              {outStatus?.session ? (
+                // 只是会话建立时的快照：缓冲与健康度在故障时会被引擎刷新，
+                // 「已送多少帧」这类计数不在这里显示（它会一直停在打开时的值，容易被当成卡住）
+                <div className="settings-hint">
+                  {"缓冲 " + outStatus.session.bufferMs.toFixed(1) + " ms · " + outStatus.session.health}
+                </div>
+              ) : null}
             </div>
             <button className="pill-btn" disabled={retryBusy} onClick={() => void retryOutput()}>
               {retryBusy ? "重试中…" : "重新尝试独占"}
@@ -408,6 +450,45 @@ export function SettingsView() {
                         : "（直通，未重采样）")}
               </div>
             </div>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">独占音量</div>
+              <div className="settings-hint">
+                {exVolume === "direct"
+                  ? "满幅直通：数字域完全不衰减，音量交给功放旋钮（系统音量滑块和静音键仍有效）"
+                  : "软件音量：在渲染线程里逐样本衰减，听感与共享模式一致"}
+              </div>
+            </div>
+            <select
+              className="settings-select"
+              value={exVolume}
+              onChange={(e) => void changeExclusive(e.target.value, exRate)}
+            >
+              <option value="software">软件音量</option>
+              <option value="direct">满幅直通</option>
+            </select>
+          </div>
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">独占采样率</div>
+              <div className="settings-hint">
+                {exRate === "adaptive"
+                  ? "跟随曲目：曲目是什么率就交给设备什么率，不重采样"
+                  : "锁定 " + exRate + " Hz：设备不接受就直接回退共享，不会偷偷换成别的率"}
+              </div>
+            </div>
+            <select
+              className="settings-select"
+              value={exRate}
+              onChange={(e) => void changeExclusive(exVolume, e.target.value)}
+            >
+              <option value="adaptive">跟随曲目</option>
+              <option value="44100">44.1 kHz</option>
+              <option value="48000">48 kHz</option>
+              <option value="88200">88.2 kHz</option>
+              <option value="96000">96 kHz</option>
+            </select>
           </div>
           <div className="settings-row">
             <div className="settings-row-main">

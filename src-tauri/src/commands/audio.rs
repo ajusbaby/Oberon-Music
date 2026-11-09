@@ -106,6 +106,70 @@ pub async fn audio_set_concert_hall(
     Ok(())
 }
 
+/// 设置键：独占音量由谁负责（software / direct；缺键 = software）
+pub const KEY_EXCLUSIVE_VOLUME: &str = "exclusiveVolume";
+/// 设置键：独占采样率策略（adaptive / 44100 / 48000 / 88200 / 96000；缺键 = adaptive）
+pub const KEY_EXCLUSIVE_RATE: &str = "exclusiveRate";
+
+/// 独占输出的两个策略（设置页「独占输出」里的两个下拉）
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExclusiveOutputSettings {
+    /// software = 渲染线程里乘音量（默认）；direct = 满幅直通，交给 DAC / 功放
+    pub volume: String,
+    /// adaptive = 跟曲目走；具体数字 = 锁死那个率
+    pub rate: String,
+}
+
+fn read_setting(state: &AppState, key: &str) -> Option<String> {
+    state
+        .db
+        .lock()
+        .ok()
+        .and_then(|g| crate::db::settings_get(&g, key).ok().flatten())
+}
+
+/// 读取独占的两个策略（脏值已在解析层归一）
+#[tauri::command]
+pub async fn audio_exclusive_output(
+    state: State<'_, Arc<AppState>>,
+) -> AppResult<ExclusiveOutputSettings> {
+    let volume = read_setting(state.inner(), KEY_EXCLUSIVE_VOLUME)
+        .map(|s| crate::engine::exclusive_session::VolumeMode::parse(&s).as_str().to_string())
+        .unwrap_or_else(|| "software".to_string());
+    let rate = read_setting(state.inner(), KEY_EXCLUSIVE_RATE)
+        .map(|s| crate::engine::exclusive_session::RatePolicy::parse(&s).as_str())
+        .unwrap_or_else(|| "adaptive".to_string());
+    Ok(ExclusiveOutputSettings { volume, rate })
+}
+
+/// 设置独占的两个策略。
+/// ⚠️ 音量策略立刻生效（渲染线程平滑跟随）；采样率策略变化会重开输出 ——
+/// 采样率是建 mixer 之前就定死的，不重开没法改。
+#[tauri::command]
+pub async fn audio_set_exclusive_output(
+    state: State<'_, Arc<AppState>>,
+    volume: String,
+    rate: String,
+) -> AppResult<()> {
+    let volume_mode = crate::engine::exclusive_session::VolumeMode::parse(&volume);
+    let rate_policy = crate::engine::exclusive_session::RatePolicy::parse(&rate);
+    let volume_value = volume_mode.as_str().to_string();
+    let rate_value = rate_policy.as_str();
+    let db = state.db.clone();
+    db_run(db, move |c| {
+        crate::db::settings_set(c, KEY_EXCLUSIVE_VOLUME, &volume_value)?;
+        crate::db::settings_set(c, KEY_EXCLUSIVE_RATE, &rate_value)?;
+        Ok(())
+    })
+    .await?;
+    state.engine.send(EngineCommand::SetExclusiveOutput {
+        volume: volume_mode,
+        rate: rate_policy,
+    })?;
+    Ok(())
+}
+
 /// 让引擎重新协商一次输出后端（重开输出并尽量回到原位置）。
 /// 用途：用户在 Windows 里改完独占设置之后，不用重启 app 也能重新尝试独占，
 /// 并让设置页里那条「回退原因」重新算一遍。

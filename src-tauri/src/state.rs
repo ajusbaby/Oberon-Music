@@ -98,6 +98,28 @@ impl AppState {
             .unwrap_or(crate::engine::hall::HallMode::Off);
         engine.send(crate::engine::EngineCommand::SetConcertHall { mode: concert_hall }).ok();
 
+        // 独占输出的两个策略（设置项 exclusiveVolume / exclusiveRate）。
+        // 采样率策略必须在**第一次打开输出之前**到位 —— 它是建 mixer 之前就定死的参数，
+        // 晚一步就等于第一首歌按自适应协商、下一首才切到用户锁定的率。
+        let exclusive_volume = db
+            .lock()
+            .ok()
+            .and_then(|g| crate::db::settings_get(&g, "exclusiveVolume").ok().flatten())
+            .map(|s| crate::engine::exclusive_session::VolumeMode::parse(&s))
+            .unwrap_or(crate::engine::exclusive_session::VolumeMode::Software);
+        let exclusive_rate = db
+            .lock()
+            .ok()
+            .and_then(|g| crate::db::settings_get(&g, "exclusiveRate").ok().flatten())
+            .map(|s| crate::engine::exclusive_session::RatePolicy::parse(&s))
+            .unwrap_or(crate::engine::exclusive_session::RatePolicy::Adaptive);
+        engine
+            .send(crate::engine::EngineCommand::SetExclusiveOutput {
+                volume: exclusive_volume,
+                rate: exclusive_rate,
+            })
+            .ok();
+
         let (tx, rx) = std::sync::mpsc::channel::<WatchMsg>();
         Ok((
             AppState {

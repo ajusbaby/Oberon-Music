@@ -245,18 +245,34 @@ const artistDetail = await evaluate("(function(){return {title:(document.querySe
 check("艺术家详情渲染", !!artistDetail.title && artistDetail.rows > 0, artistDetail.title + " · " + artistDetail.rows + " 行 · 专辑分片 " + artistDetail.chips);
 await shot("ui-artist-detail.png");
 
-// 6. 搜索
-await click("var b=[].slice.call(document.querySelectorAll('.nav-item')).find(function(x){return x.textContent.indexOf('Search')>=0});b&&b.click();return !!b;");
-await sleep(600);
+// 6. 搜索（独立浮层：顶栏触发器打开，Esc 关闭，全程不改当前页面）
+await click("var b=[].slice.call(document.querySelectorAll('.nav-item')).find(function(x){return x.textContent.indexOf('Albums')>=0});b&&b.click();return !!b;");
+await sleep(700);
+const routeBefore = await evaluate("(document.querySelector('.view-title')||{}).textContent");
+await click("var b=document.querySelector('.search-trigger');b&&b.click();return !!b;");
+const panelOpen = await waitFor("!!document.querySelector('.search-panel')", 8000);
+const expanded = await evaluate("(document.querySelector('.search-trigger')||{}).getAttribute? document.querySelector('.search-trigger').getAttribute('aria-expanded') : null");
+check("搜索浮层打开", panelOpen === true && expanded === "true", "aria-expanded=" + expanded);
 await typeInto("#searchInput", "love");
-await waitFor("document.querySelectorAll('.track-row, .album-card, .empty-state').length > 0", 12000);
+await waitFor("document.querySelectorAll('.search-hit, .search-panel-empty').length > 0", 12000);
 await sleep(600);
-const search = await evaluate("(function(){return {sections:document.querySelectorAll('.section-title').length,tracks:document.querySelectorAll('.track-row').length,albums:document.querySelectorAll('.album-card').length,artists:document.querySelectorAll('.artist-row').length,sub:(document.querySelector('.view-sub')||{}).textContent};})()");
-check("搜索结果渲染", search.sections > 0, "分区 " + search.sections + " 个 · 歌曲 " + search.tracks + " · 专辑 " + search.albums + " · 艺术家 " + search.artists);
+const search = await evaluate("(function(){return {groups:document.querySelectorAll('.search-hit-group-title').length,hits:document.querySelectorAll('.search-hit').length,active:document.querySelector('.search-hit.is-active')?document.querySelector('.search-hit.is-active').id:null,route:(document.querySelector('.view-title')||{}).textContent};})()");
+check("搜索浮层结果渲染", search.groups > 0 && search.hits > 0, "分区 " + search.groups + " 个 · 结果 " + search.hits + " 条 · 选中 " + search.active);
+check("搜索不改变当前页面", search.route === routeBefore, "打开前后都停在《" + search.route + "》");
 await shot("ui-search.png");
 
+// 键盘：↓ 移动选中项，Esc 关闭并把焦点还给触发器
+await send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "ArrowDown", code: "ArrowDown", windowsVirtualKeyCode: 40 });
+await sleep(300);
+const moved = await evaluate("(function(){var el=document.querySelector('.search-hit.is-active');return el?el.id:null;})()");
+check("搜索浮层键盘导航", moved !== null && moved !== search.active, "选中项 " + search.active + " → " + moved);
+await send("Input.dispatchKeyEvent", { type: "rawKeyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+await send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+await sleep(500);
+const closed = await evaluate("(function(){var a=document.activeElement;return {panel:!!document.querySelector('.search-panel'),focus:a?(a.id||a.className):null};})()");
+check("Esc 关闭搜索浮层并归还焦点", closed.panel === false && closed.focus === "searchTrigger", "焦点回到 " + closed.focus);
+
 // 7. 新建播放列表（对话框）+ 添加歌曲
-await evaluate("var i=document.getElementById('searchInput');i&&(i.value='');return true;");
 await click("var b=document.querySelector('.playlist-add-btn');b&&b.click();return !!b;");
 await sleep(700);
 const dialogOpen = await evaluate("(function(){return {visible:!!document.querySelector('.dialog-overlay.visible'),title:(document.querySelector('.dialog-title')||{}).textContent};})()");

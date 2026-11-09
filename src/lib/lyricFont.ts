@@ -41,8 +41,8 @@ export function slotLang(slot: FontSlot): string {
 
 /** 字号倍率：1 = 设计稿原始大小 */
 export const DEFAULT_SIZE = 1;
-/** 字重：设计稿正文 420 */
-export const DEFAULT_WEIGHT = 420;
+/** 字重：歌词正文默认粗体（中文只有 400/700 两档，取 700 才能和西文粗体对上） */
+export const DEFAULT_WEIGHT = 700;
 export const SIZE_RANGE: [number, number] = [0.7, 1.8];
 
 export const WEIGHT_OPTIONS: { value: number; label: string }[] = [

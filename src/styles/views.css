@@ -675,47 +675,6 @@
     color: var(--color-warn, #B26A00);
 }
 
-.settings-value {
-    font-size: 13.5px;
-    color: var(--color-text-secondary);
-    font-variant-numeric: tabular-nums;
-    flex-shrink: 0;
-}
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-    gap: 14px;
-    margin-bottom: 20px;
-    flex-shrink: 0;
-}
-
-.stat-card {
-    background: var(--card-glass-bg);
-    /* ⚠️ 这里原来有两层 backdrop-filter: blur(20px) saturate(1.3)。设置页背后只有外壳的
-       **静态渐变**（颗粒已烘焙进背景），模糊一个静态渐变几乎看不出区别；但每个区块
-       进页面时都要重算一次模糊 —— 这是「进设置页瞬间功耗偏高」的主要来源之一。
-       实测：关掉前后像素差 mean ≈ 0.0x/255。 */
-    border: 1px solid rgba(255, 255, 255, 0.45);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-card);
-    padding: 16px 18px;
-}
-
-.stat-value {
-    font-size: 24px;
-    font-weight: 640;
-    letter-spacing: -0.5px;
-    color: var(--color-text-primary);
-    font-variant-numeric: tabular-nums;
-}
-
-.stat-label {
-    margin-top: 4px;
-    font-size: 12.5px;
-    color: var(--color-text-secondary);
-}
-
 /* ===== 扫描进度横幅 ===== */
 .scan-banner {
     position: absolute;
@@ -1053,20 +1012,6 @@
     gap: 8px;
     margin-bottom: 6px;
     flex-shrink: 0;
-}
-
-.search-track-block {
-    display: flex;
-    flex-direction: column;
-    max-height: 380px;
-    min-height: 120px;
-}
-
-.settings-path {
-    font-size: 13px;
-    font-weight: 500;
-    word-break: break-all;
-    white-space: normal;
 }
 
 /* ===== 弹窗卡片：实心材质（按需求去掉玻璃感）=====
@@ -1680,12 +1625,6 @@
     cursor: default;
 }
 
-.lp-active {
-    font-size: calc(31px * var(--lyric-size, 1));
-    font-weight: calc(var(--lyric-weight, 420) + 80);
-    color: rgba(255, 255, 255, 0.97);
-}
-
 /* ===== 亚克力磨砂材质（按用户给定范例实现）=====
    范例的关键认知：**"厚度"不来自不透明度，而来自
      ① 四边内侧高光（上强下弱）+ 外投影  ② 颗粒层（overlay）  ③ 表面斜向光泽带**
@@ -1717,8 +1656,12 @@
     background-size: 120px 120px, auto;
     background-repeat: repeat, no-repeat;
     background-blend-mode: overlay, normal;
-    /* 永久去掉白线与白描边：border 与 inset 四边高光在非白色背景上都会显成白边
-       （歌词页深色背景下尤其明显）。亚克力的"厚度"改由渐变底 + 颗粒 + 柔和内发光提供。 */
+    /* 窗口轮廓的线宽/颜色：轮廓本体画在最高的 ::before 层（见下方 .app-shell::before）。
+       颜色用不透明实色而不是半透明：半透明线叠在不同底色上（侧栏白 / 主区光雾 / 播放条霜面）
+       会得到四个不同的亮度，加上非整数缩放下边缘那半个物理像素的抗锯齿，
+       右边和下边看起来就比左边和上边细一档。实色四边完全一致。 */
+    --shell-border-width: 2px;
+    --shell-edge: #d5d8de;
     border: 0;
     box-shadow:
         0 12px 30px -24px rgba(0, 0, 0, 0.42),
@@ -1734,12 +1677,28 @@
 
 /* 颗粒层已并入 .app-shell 自身的 background（见上）：不再是一个全窗 mix-blend-mode 层。 */
 
+/* ===== 窗口轮廓（2026-11）=====
+   和同色/浅色的应用窗口叠在一起时，靠这条中性细线把边界交代清楚。
+   曾经用 .app-shell 的 border 画：子元素（侧栏/主区/播放条）铺满整个窗口、绘制顺序在外壳
+   border 之上，圆角处它们的直角会啃掉一段线，四个角的线看起来粗细不一。
+   现在改成独立一层放在所有内容之上（z-index 高于侧栏与播放条那两块 backdrop-filter 层，
+   低于对话框/开屏），沿 border-radius 画 inset 描边：粗细恒定、不被任何子元素遮挡、不占布局。 */
+.app-shell::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: var(--app-radius);
+    box-shadow: inset 0 0 0 var(--shell-border-width, 2px) var(--shell-edge, #d5d8de);
+    pointer-events: none;
+    z-index: 120;
+}
+
 /* 表面光泽：斜向高光带 + 顶部柔光 */
 .app-shell::after {
     content: "";
     position: absolute;
     inset: 0;
-    border-radius: inherit;
+    border-radius: var(--app-radius);
     clip-path: inset(0 round var(--app-radius));
     pointer-events: none;
     z-index: 2;
@@ -1752,6 +1711,24 @@
             rgba(255, 255, 255, 0.14) 100%
         ),
         radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0) 62%);
+}
+
+/* ===== 圆角处的边框粗细一致（2026-11）=====
+   子元素（侧栏、主区）是直角矩形，绘制顺序在父级 border 之上：
+   在圆角处它们的直角会盖住 border 环带的一部分，视觉上就是"角上的线更细/更虚"。
+   给它们补上与内缘同半径的圆角，让出边框那 2px，角部线条才能保持等宽。
+
+   ⚠️ 只补贴着窗口上沿的那两个角：底部由播放条接管（它横跨整个宽度、自带
+   clip-path 的下沿圆角），侧栏/主区若再画一遍底部圆角，就会在播放条上边缘
+   露出两段同心但不同半径的弧，看起来像圆角错位。 */
+.app-shell .sidebar {
+    border-top-left-radius: calc(var(--app-radius) - var(--shell-border-width, 2px));
+    border-bottom-left-radius: 0;
+}
+
+.app-shell .main-content {
+    border-top-right-radius: calc(var(--app-radius) - var(--shell-border-width, 2px));
+    border-bottom-right-radius: 0;
 }
 
 /* 侧栏 / 搜索框：同一套亚克力语言，层次略低 */
@@ -1789,7 +1766,8 @@
        必须在播放条本体上裁圆角（详见"圆角漏角修复"）。 */
     clip-path: inset(
         0 round var(--player-radius-top) var(--player-radius-top)
-        calc(var(--player-radius-bottom) - 1px) calc(var(--player-radius-bottom) - 1px)
+        calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
+            calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
     );
     /* 底色 76% 不透明 → 背板只占 24%，saturate/brightness 基本看不见，去掉省两个 pass */
     /* 半径 24px → 10px，并去掉 saturate/brightness：
@@ -1817,6 +1795,10 @@
     clip-path: none;
 }
 
+.app-shell.maximized::before {
+    border-radius: 0;
+}
+
 /* 底栏在最大化/全屏下必须也是直角 —— 之前有两处漏网，左下/右下会留一对圆角：
    ① design.css 的 `.app-shell.maximized .bottom-player` 只把 border-radius 归零，
       而 views.css 里 `.app-shell > .bottom-player` 还有一条 clip-path 在裁圆角
@@ -1835,7 +1817,10 @@
    一旦进入歌词页（深色背景 + 面板四周留 16px 边距），它们就变成窗口四周的一圈白线。
    用 :has() 在歌词页存在时把这两项关掉，主界面不受影响。 */
 .app-shell:has(.lyrics-page) {
-    border-color: rgba(255, 255, 255, 0);
+    box-shadow: none;
+}
+
+.app-shell:has(.lyrics-page)::before {
     box-shadow: none;
 }
 
@@ -1924,7 +1909,8 @@
 .app-shell > .bottom-player {
     border-radius: 0 0 var(--player-radius-bottom) var(--player-radius-bottom);
     clip-path: inset(
-        0 round 0 0 calc(var(--player-radius-bottom) - 1px) calc(var(--player-radius-bottom) - 1px)
+        0 round 0 0 calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
+            calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
     );
 }
 
@@ -2067,12 +2053,15 @@
 
     /* ② 材质层：外壳自己那层写死的白色亚克力渐变 */
     background: #131316;
+    /* 深色下轮廓换成 14% 白，深底上才看得见边界 */
+    --shell-edge: #35353b;
     box-shadow: 0 12px 30px -24px rgba(0, 0, 0, 0.6);
 }
 
-/* 颗粒与光泽带在深色下要收敛，否则整屏发灰 */
+/* 颗粒与光泽带在深色下要收敛，否则整屏发灰。
+   注意 ::before 现在承担窗口轮廓，必须保持不透明，收敛只作用于旧颗粒层的语义。 */
 .app-shell.low-power.theme-dark::before {
-    opacity: 0.1;
+    opacity: 1;
 }
 
 .app-shell.low-power.theme-dark::after {
@@ -2220,10 +2209,6 @@
     display: none;
 }
 
-.app-shell.low-power .cf-playing-glow {
-    animation: none;
-}
-
 /* ===== 装饰性无限动画的「暂停闸」 =====
    CSS 无限动画由**合成器按刷新率**驱动（120/144/180Hz 屏上就是 120/144/180 帧/秒），
    完全绕过 lib/frameBudget.ts 的帧预算 —— 这就是"加了帧预算但降幅很小"的直接原因。
@@ -2320,3 +2305,456 @@
 .crash-primary:hover:not(:disabled) {
     background: #000000;
 }
+
+
+/* ===== 正在播放的曲目行（2026-11 需求：比悬停明显、行首播放/暂停按钮） =====
+   原来 .track-row:hover 与 .track-row.playing 同为 rgba(255,255,255,.85)，
+   播放中那一行和鼠标扫过的那一行长得一模一样。现在播放态只靠两件事区分：
+   暖底 + 橙色加粗标题；悬停仍是中性薄白，两者不再混淆。
+   不做左缘竖条、不做描边、行首图标也不加圆底 —— 保持原有的无框视觉。 */
+.track-row.playing {
+    background: rgba(180, 99, 42, 0.13);
+}
+
+.track-row.playing:hover {
+    background: rgba(180, 99, 42, 0.2);
+}
+
+.track-row.playing .track-title {
+    color: #B4632A;
+    font-weight: 650;
+}
+
+/* 行首图标：当前曲目才出现，播放中显示暂停、暂停中显示播放。
+   和播放条上的控制键一个路子 —— 裸图标，不加圆底、不加边框，
+   只占住原来序号那一格的宽度，行内容不会位移。 */
+.track-index-btn {
+    flex: 0 0 26px;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: #B4632A;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color 140ms ease, transform 140ms ease;
+}
+
+.track-index-btn:hover {
+    color: #8F4E20;
+}
+
+.track-index-btn:active {
+    transform: scale(0.92);
+}
+
+.track-index-btn svg {
+    width: 15px;
+    height: 15px;
+    display: block;
+}
+
+/* 夜间主题：同一套信号换暖橙 #E8A87C，别用亮橙压在深底上 */
+.app-shell.low-power.theme-dark .track-row.playing {
+    background: rgba(232, 168, 124, 0.14);
+}
+
+.app-shell.low-power.theme-dark .track-row.playing:hover {
+    background: rgba(232, 168, 124, 0.2);
+}
+
+
+
+.app-shell.low-power.theme-dark .track-row.playing .track-title {
+    color: #E8A87C;
+}
+
+.app-shell.low-power.theme-dark .track-index-btn {
+    color: #E8A87C;
+}
+
+.app-shell.low-power.theme-dark .track-index-btn:hover {
+    color: #F3C6A4;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .track-index-btn {
+        transition: none;
+    }
+
+    .track-index-btn:active {
+        transform: none;
+    }
+}
+
+
+/* ===== 搜索浮层（独立模块，2026-11）=====
+   搜索不再借专辑页的路由：点顶栏只在上层开一块浮层，关掉后当前页面原样还在。
+   材质沿用 --ob-* 令牌 —— 实色 .96 白 + 1px 细线 + 单向投影；
+   刻意**不给遮罩加 backdrop-filter**：那是全窗滤镜，打开瞬间要对整屏重算一次模糊。 */
+
+/* 顶栏触发器：外观仍是那枚搜索框，但它现在是个按钮 */
+.search-bar.search-trigger {
+    appearance: none;
+    font-family: inherit;
+    font-size: 14px;
+    text-align: left;
+    cursor: pointer;
+    color: var(--ob-text-tertiary);
+    /* design.css 那条 transition: all 会连带过渡阴影与边框宽度，收窄成需要的几项 */
+    transition:
+        background-color var(--transition-normal),
+        border-color var(--transition-normal),
+        box-shadow var(--transition-normal);
+}
+
+.search-trigger-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 14px;
+    letter-spacing: -0.1px;
+    color: var(--ob-text-tertiary);
+}
+
+.search-kbd {
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border: 1px solid var(--ob-border-subtle);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.6);
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1.3;
+    letter-spacing: 0.02em;
+    color: var(--ob-text-tertiary);
+    transition:
+        color var(--transition-fast),
+        border-color var(--transition-fast);
+}
+
+.search-trigger:hover .search-kbd {
+    color: var(--ob-text-secondary);
+    border-color: var(--ob-border-default);
+}
+
+/* 浮层：z-index 90 —— 高于歌词页(60)与队列面板(50)，低于对话框(100)和窗口描边(120) */
+.search-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 90;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 76px 36px 36px;
+    /* 遮罩要够沉：浮层是"暂时接管注意力"，底下那层封面流不该还在抢视线。
+       用纯 rgba 不用 backdrop-filter —— 全窗模糊每打开一次都要重算整屏。 */
+    background: rgba(15, 23, 42, 0.3);
+    animation: searchOverlayIn 140ms ease-out;
+}
+
+.search-panel {
+    display: flex;
+    flex-direction: column;
+    width: min(620px, 100%);
+    max-height: 100%;
+    overflow: hidden;
+    /* 纯白而不是 .96：96% 白会让底下高饱和的封面透出 4%，
+       在大面积浅色上就是一块一眼能看见的"脏色块"（实测确实如此）。
+       层次交给边框 + 投影 + 内高光，不靠透明度。 */
+    background: var(--ob-surface-solid);
+    border: 1px solid var(--ob-border-default);
+    border-radius: 16px;
+    box-shadow:
+        0 28px 64px -24px rgba(15, 23, 42, 0.5),
+        0 2px 10px rgba(15, 23, 42, 0.08);
+    animation: searchPanelIn 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@keyframes searchOverlayIn {
+    from {
+        opacity: 0;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+@keyframes searchPanelIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+.search-panel-field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+    height: 58px;
+    padding: 0 12px 0 18px;
+    border-bottom: 1px solid var(--ob-border-subtle);
+}
+
+.search-panel-field > svg {
+    flex-shrink: 0;
+    color: var(--ob-text-tertiary);
+}
+
+.search-panel-input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    border: none;
+    background: transparent;
+    font-family: inherit;
+    font-size: 16px;
+    letter-spacing: -0.2px;
+    color: var(--ob-text-primary);
+    outline: none;
+}
+
+.search-panel-input::placeholder {
+    color: var(--ob-text-tertiary);
+}
+
+/* 输入框里只剩一枚 ✕（清空）。退出浮层靠点面板外面，不再摆第二枚关闭按钮。 */
+.search-panel-field .icon-only-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    opacity: 0.7;
+    transition:
+        opacity var(--transition-fast),
+        background-color var(--transition-fast);
+}
+
+.search-panel-field .icon-only-btn:hover {
+    opacity: 1;
+}
+
+.search-panel-body {
+    flex: 1;
+    min-height: 120px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 6px 8px 10px;
+}
+
+.search-hit-group-title {
+    padding: 10px 10px 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ob-text-tertiary);
+}
+
+.search-hit {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 52px;
+    padding: 0 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background-color 120ms ease-out;
+}
+
+.search-hit:hover {
+    background: rgba(15, 23, 42, 0.04);
+}
+
+/* 键盘选中：比 hover 明显一档，但不借用"正在播放"的暖色 —— 那是播放器的语义 */
+.search-hit.is-active {
+    background: rgba(15, 23, 42, 0.06);
+    box-shadow: inset 0 0 0 1px var(--ob-border-subtle);
+}
+
+.search-hit-cover,
+.search-hit-glyph {
+    /* 封面必须裁进 36×36：`<Cover>` 渲染的是 <img>，它没有自带尺寸约束，
+       不写 overflow + object-fit 就会按原图尺寸铺开，把整行的文字盖住。 */
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.92);
+}
+
+.search-hit-cover img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.search-hit-glyph {
+    background: rgba(15, 23, 42, 0.06);
+    color: var(--ob-text-secondary);
+    font-weight: 600;
+}
+
+.search-hit-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.search-hit-title {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--ob-text-primary);
+}
+
+.search-hit-sub {
+    margin-top: 2px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12.5px;
+    color: var(--ob-text-secondary);
+}
+
+.search-hit-kind {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.05);
+    font-size: 11.5px;
+    color: var(--ob-text-tertiary);
+}
+
+.search-panel-empty {
+    padding: 34px 16px 40px;
+    text-align: center;
+}
+
+.search-panel-empty .empty-state-icon {
+    font-size: 26px;
+    margin-bottom: 8px;
+}
+
+.search-panel-empty .empty-state-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ob-text-secondary);
+}
+
+.search-panel-empty .empty-state-sub {
+    margin-top: 4px;
+    font-size: 12.5px;
+    color: var(--ob-text-tertiary);
+}
+
+/* 底部那条「↑↓ 选择 / Enter 打开 / Esc 关闭」提示已按要求移除：
+   快捷键在顶栏的 Ctrl K 徽标里已经交代过一次，浮层里再挂一条只见字不见人。 */
+
+/* 窄窗：浮层贴边收一点，顶部间距跟着缩 */
+@media (max-width: 1024px) {
+    .search-overlay {
+        padding: 48px 20px 24px;
+    }
+
+    .search-panel-field {
+        height: 52px;
+    }
+
+    .search-panel-input {
+        font-size: 15px;
+    }
+}
+
+/* 低功耗：一次性入场动画也省掉（它是合成层的额外一遍），直接出现 */
+.app-shell.low-power .search-overlay,
+.app-shell.low-power .search-panel {
+    animation: none;
+}
+
+/* 低功耗 × 夜间：`--ob-*` 的文字与边框必须在这里重新赋值。
+   :root 里那套是给浅色底算的，深色外壳直接沿用 = 深底深字（本次浮层就踩了这个坑：
+   面板已经是深板了，字还是 #17202B，等于没有字）。 */
+.app-shell.low-power.theme-dark {
+    --ob-surface: #17171A;
+    --ob-surface-raised: #202026;
+    --ob-surface-solid: #1B1B1F;
+    --ob-surface-muted: #17171A;
+    --ob-border-subtle: rgba(255, 255, 255, 0.08);
+    --ob-border-default: rgba(255, 255, 255, 0.12);
+    --ob-border-strong: rgba(255, 255, 255, 0.18);
+    --ob-inset-highlight: rgba(255, 255, 255, 0.06);
+    --ob-text-primary: #F2F2F5;
+    --ob-text-secondary: #A1A1A8;
+    --ob-text-tertiary: #8C8C95;
+    --ob-text-disabled: #6A6A72;
+    --ob-accent: #E8A87C;
+    --ob-accent-soft: rgba(232, 168, 124, 0.14);
+    --ob-accent-line: rgba(232, 168, 124, 0.34);
+    --ob-focus: #7FB2F0;
+    --ob-danger: #F2765F;
+}
+
+.app-shell.low-power.theme-dark .search-overlay {
+    background: rgba(0, 0, 0, 0.5);
+}
+
+.app-shell.low-power.theme-dark .search-panel {
+    background: #1B1B1F;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 28px 64px -24px rgba(0, 0, 0, 0.72);
+}
+
+.app-shell.low-power.theme-dark .search-hit:hover {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.app-shell.low-power.theme-dark .search-hit.is-active {
+    background: rgba(255, 255, 255, 0.09);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.app-shell.low-power.theme-dark .search-hit-glyph {
+    background: rgba(255, 255, 255, 0.08);
+    color: #A1A1A8;
+}
+
+.app-shell.low-power.theme-dark .search-hit-kind {
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell.low-power.theme-dark .search-kbd {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(255, 255, 255, 0.12);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .search-overlay,
+    .search-panel {
+        animation: none;
+    }
+
+    .search-hit,
+    .search-kbd {
+        transition: none;
+    }
+}
+
+

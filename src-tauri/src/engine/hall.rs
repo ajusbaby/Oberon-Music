@@ -88,10 +88,11 @@ pub enum HallMode {
 
 impl HallMode {
     pub fn parse(s: &str) -> Self {
-        // 早期版本存过 soft / standard / original 三个档位名，含义都是「开着」，
-        // 统一折到 On —— 升级后不该把用户已经开着的效果悄悄关掉。
+        // 只有显式的 "on" 才算开启 —— 默认必须是干声。
+        // 早期版本存过 soft / standard / original 三个档位名，那是当时「默认打开」写进库的取值、
+        // 不是用户主动选的；一并按关闭处理，避免升级后一进应用就自带混响。
         match s {
-            "on" | "soft" | "standard" | "original" => Self::On,
+            "on" => Self::On,
             _ => Self::Off,
         }
     }
@@ -656,9 +657,9 @@ mod tests {
         assert_eq!(HallMode::parse("bogus"), HallMode::Off);
         assert!(!HallMode::Off.enabled());
         assert!(HallMode::On.enabled());
-        // 老版本存下的档位名必须继续表示「开着」，不能把用户的效果关掉
+        // 老版本自带的档位名不是用户选择，一律回落关闭（默认必须是干声）
         for old in ["soft", "standard", "original"] {
-            assert_eq!(HallMode::parse(old), HallMode::On, "旧值 {old} 应当折到 On");
+            assert_eq!(HallMode::parse(old), HallMode::Off, "旧值 {old} 应当回落 Off");
         }
     }
 

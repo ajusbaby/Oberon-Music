@@ -387,17 +387,26 @@
     font-size: var(--sl-fs);
     line-height: 1.44;
     letter-spacing: -0.012em;
-    font-weight: var(--lyric-weight, 400);
+    font-weight: var(--lyric-weight, 700);
     color: var(--sl-fg);
     white-space: normal;
     overflow-wrap: anywhere;
     transition: color 220ms ease;
 }
 
-/* 加粗用相对量：用户选的 300 / 500 各自变粗一档，不会一律被拉成 700 */
+/* 字重全篇统一：原文行和译文行取同一个 --lyric-weight（默认粗体 700）。
+   不再给当前句额外加粗 —— 中文字体只有 400/700 两档，一旦把 420 抬到 560
+   就会被就近匹配成 700，而西文停在 560，同一组里英文细、中文粗。
+   当前句的强调改为只靠颜色、模糊与逐句扫过，不靠字重跳档。 */
 .sl-g.is-active .sl-line {
-    font-weight: calc(var(--lyric-weight, 400) + 140);
+    font-weight: var(--lyric-weight, 700);
     color: var(--sl-fg);
+}
+
+/* 当前句的译文：字重跟原文一致（不做 +140，也不封顶），
+   只靠颜色比原文浅一档来拉开层级。 */
+.sl-g.is-active .sl-line.is-tr {
+    color: rgba(var(--sl-fg-rgb) / 0.74);
 }
 
 /* 逐句扫过（规范 I.3）：当前句原文行按 --sl-k 从左往右"点亮"。

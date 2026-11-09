@@ -6,6 +6,7 @@ import { Sidebar } from "./components/Sidebar";
 import { TopBar } from "./components/TopBar";
 import { PlayerBar } from "./components/PlayerBar";
 import { DialogLayer } from "./components/DialogLayer";
+import { SearchPanel } from "./components/SearchPanel";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LyricsPage } from "./components/LyricsPage";
 import { HomeAmbient } from "./components/HomeAmbient";
@@ -16,7 +17,7 @@ import { FavoritesView } from "./views/FavoritesView";
 import { AlbumView } from "./views/AlbumView";
 import { ArtistView } from "./views/ArtistView";
 import { PlaylistView } from "./views/PlaylistView";
-import { SearchView } from "./views/SearchView";
+import { AlbumsView } from "./views/AlbumsView";
 import { SettingsView } from "./views/SettingsView";
 import { useNavStore } from "./stores/navStore";
 import { useUiStore, toast } from "./stores/uiStore";
@@ -94,8 +95,8 @@ function CurrentView() {
   switch (view.name) {
     case "home":
       return <HomeView />;
-    case "search":
-      return <SearchView />;
+    case "albums":
+      return <AlbumsView />;
     case "library":
       return <LibraryView />;
     case "favorites":
@@ -230,6 +231,14 @@ export default function App() {
   // 全局快捷键（输入框内不响应）：空格 播放/暂停，←/→ 上一首/下一首，Esc 关弹层
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ctrl/Cmd + K：任何地方都能叫出搜索浮层（包括正在对话框里打字的时候）
+      if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        const ui = useUiStore.getState();
+        if (ui.searchOpen) ui.closeSearch();
+        else ui.openSearch();
+        return;
+      }
       const el = document.activeElement;
       const typing =
         !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT");
@@ -244,6 +253,11 @@ export default function App() {
       // 弹层（对话框 / 队列面板）打开时键盘归弹层：空格用于激活弹层里的焦点按钮，
       // 方向键在弹层内移动，Esc 由弹层自己关。以前这里照常响应，会在弹层上"隔空"切歌。
       if (ui.dialog || ui.queueOpen) return;
+      // 搜索浮层打开时键盘归浮层：↑↓ 在结果里走，空格不该"隔空"把歌切了
+      if (ui.searchOpen) {
+        if (e.key === "Escape") ui.closeSearch();
+        return;
+      }
       const homeOwnsArrows = useNavStore.getState().view.name === "home" && !ui.lyricsOpen;
       // 焦点停在按钮/链接上时，空格交给浏览器做原生激活：preventDefault 会吞掉 click，
       // 于是 Tab 到「播放」再按空格什么都不发生（键盘用户等于没有这个按钮）。
@@ -323,6 +337,8 @@ export default function App() {
         </main>
       </div>
       <PlayerBar />
+      {/* 搜索浮层：独立模块，挂在播放条之上（z-index 见 views.css 的 .search-overlay） */}
+      <SearchPanel />
       {/* 歌词页是覆盖层，兜底画面没地方放卡片：出错就关掉它并 toast，音乐继续放 */}
       <ErrorBoundary
         scope="silent"

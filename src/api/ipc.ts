@@ -5,7 +5,7 @@ import type {
   LyricsResult,
   Album, Artist, AudioDeviceInfo, ExclusiveDeviceCaps, FolderInfo, LibraryStats, Paginated, Playlist,
   PlaylistDetail, PlayerState, PlayMode, QueuePosition, SearchResult, Track, TrackFilter,
-  OutputStatus,
+  OutputStatus, ExclusiveOutputSettings,
 } from "./types";
 
 export async function scanAddMusicFolder(path: string): Promise<FolderInfo> {
@@ -59,6 +59,14 @@ export async function audioSetConcertHall(mode: string): Promise<void> {
 /** 当前输出后端状态：实际在用的后端 / 独占格式 / 回退原因（设置页「独占输出」显示） */
 export async function audioOutputStatus(): Promise<OutputStatus> {
   return invoke("audio_output_status");
+}
+/** 读取独占的两个策略（音量落点 / 采样率锁定） */
+export async function audioExclusiveOutput(): Promise<ExclusiveOutputSettings> {
+  return invoke("audio_exclusive_output");
+}
+/** 设置独占的两个策略：音量立刻生效，采样率变化会重开输出 */
+export async function audioSetExclusiveOutput(volume: string, rate: string): Promise<void> {
+  return invoke("audio_set_exclusive_output", { volume, rate });
 }
 
 export async function libraryStats(): Promise<LibraryStats> {

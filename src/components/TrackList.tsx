@@ -59,6 +59,7 @@ export function TrackList({
 }: TrackListProps) {
   const player = usePlayerStore((s) => s.state);
   const playTrack = usePlayerStore((s) => s.playTrack);
+  const togglePlay = usePlayerStore((s) => s.toggle);
   const openDialog = useUiStore((s) => s.openDialog);
   const { isFavorite, toggle } = useFavorites();
 
@@ -176,6 +177,9 @@ export function TrackList({
             {visible.map((track, i) => {
               const index = start + i;
               const playing = player?.current?.trackId === track.id;
+              // 「当前曲目」和「正在响」是两件事：暂停后 current 仍是这首，
+              // 行首图标要跟着 status 在播放/暂停之间换，否则暂停时还显示暂停符号
+              const isPlaying = playing && player?.status === "playing";
               return (
                 <div
                   key={track.id}
@@ -190,7 +194,24 @@ export function TrackList({
                     setMenu({ x: e.clientX, y: e.clientY, track });
                   }}
                 >
-                  <span className="track-index">{playing ? "▶" : index + 1}</span>
+                  {playing ? (
+                    /* 当前曲目：行首是个真按钮（播放/暂停切换），不再是一枚固定的 ▶ 字符。
+                       按钮自带 stopPropagation，点它只切暂停，不会把整首歌从头重放。 */
+                    <button
+                      type="button"
+                      className={"track-index track-index-btn" + (isPlaying ? " is-playing" : "")}
+                      aria-label={isPlaying ? "暂停" : "播放"}
+                      title={isPlaying ? "暂停" : "播放"}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void togglePlay();
+                      }}
+                    >
+                      <Icon name={isPlaying ? "pause" : "play"} size={14} />
+                    </button>
+                  ) : (
+                    <span className="track-index">{index + 1}</span>
+                  )}
                   <Cover className="track-cover" trackId={track.id} seed={track.id} />
                   <div className="track-head">
                     <div className="track-title" title={track.title}>

@@ -1,68 +1,32 @@
-// 顶栏：搜索框 + 窗口控制（最小化 / 最大化 / 关闭）
-import { useEffect, useState } from "react";
+// 顶栏：搜索入口 + 窗口控制（最小化 / 最大化 / 关闭）
+// 搜索是独立模块（components/SearchPanel.tsx）—— 这里只是一个"打开它"的触发器。
+// 以前点击搜索框会把路由切到专辑页，等于拿一个全局视图去换一次输入，很亏。
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Icon } from "./Icon";
-import { useSearchStore } from "../stores/searchStore";
-import { useNavStore, nav } from "../stores/navStore";
+import { SEARCH_TRIGGER_ID, useUiStore } from "../stores/uiStore";
 
 const appWindow = getCurrentWindow();
 
 /** maximized 由 App 统一监听窗口事件后传下来（顶部栏自己再订阅一遍会和 App 抢同一个事件源） */
 export function TopBar({ maximized }: { maximized: boolean }) {
-  const query = useSearchStore((s) => s.query);
-  const setQuery = useSearchStore((s) => s.setQuery);
-  const view = useNavStore((s) => s.view);
-  const [placeholderIndex] = useState(0);
-
-  // 进入搜索视图时聚焦输入框
-  useEffect(() => {
-    if (view.name !== "search") return;
-    const el = document.getElementById("searchInput") as HTMLInputElement | null;
-    el?.focus();
-  }, [view.name]);
-
-  const placeholders = [
-    "搜索歌曲、艺术家或专辑…",
-    "Search for songs, artists, albums...",
-  ];
+  const openSearch = useUiStore((s) => s.openSearch);
+  const searchOpen = useUiStore((s) => s.searchOpen);
 
   return (
     <div className="main-top-bar drag-region" data-tauri-drag-region>
-      <div className="search-bar" onClick={() => nav.search()}>
+      <button
+        id={SEARCH_TRIGGER_ID}
+        type="button"
+        className="search-bar search-trigger"
+        aria-label="搜索歌曲、艺术家或专辑"
+        aria-haspopup="dialog"
+        aria-expanded={searchOpen}
+        onClick={openSearch}
+      >
         <Icon name="search" />
-        <input
-          id="searchInput"
-          type="text"
-          placeholder={placeholders[placeholderIndex]}
-          autoComplete="off"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            if (e.target.value.trim().length > 0) nav.search();
-          }}
-          onFocus={() => {
-            if (query.trim().length > 0) nav.search();
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setQuery("");
-              (e.target as HTMLInputElement).blur();
-            }
-          }}
-        />
-        {query.length > 0 && (
-          <button
-            className="icon-only-btn"
-            aria-label="清空"
-            onClick={(e) => {
-              e.stopPropagation();
-              setQuery("");
-            }}
-          >
-            <Icon name="close" size={13} />
-          </button>
-        )}
-      </div>
+        <span className="search-trigger-label">搜索歌曲、艺术家或专辑…</span>
+        <kbd className="search-kbd">Ctrl K</kbd>
+      </button>
 
       <div className="window-controls">
         <button className="window-btn" aria-label="最小化" onClick={() => void appWindow.minimize()}>

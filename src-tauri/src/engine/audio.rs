@@ -10,6 +10,9 @@ use crate::engine::backend::{self, Fallback, OutputMode};
 use crate::engine::beat::{BeatMeter, BeatTap};
 use crate::engine::downmix;
 use crate::engine::exclusive::ExclusiveSink;
+use crate::engine::exclusive_session::{
+    GainRamp, RatePolicy, SessionDiagnostics, SessionState, VolumeMode,
+};
 use crate::engine::hall::{HallControl, HallMode, HallSource};
 use crate::engine::resample::ResamplerSource;
 use crate::error::{AppError, E_AUDIO_DEVICE, E_DECODE};
@@ -59,6 +62,9 @@ pub struct OutputStatus {
     pub source_rate: Option<u32>,
     /// 上面两者不一致时说明走了多相 sinc 重采样（设置页据此显示，不用翻控制台）
     pub resampling: bool,
+    /// 独占会话的诊断快照（缓冲/欠载/超时/健康度）。
+    /// 只在真正走过独占时才有值；回退共享时是 None —— 设置页据此决定要不要显示这一行。
+    pub session: Option<SessionDiagnostics>,
 }
 
 /// 输出设备 + 播放句柄的持有者（Player/Drop 语义：句柄释放即停止）
@@ -101,6 +107,16 @@ pub struct CoreAudio {
     /// 本次要播的曲目采样率。恢复流程（try_recover_device 先 ensure_with 再 load_and_play）
     /// 也要用它协商独占，否则会按设备默认率开一次、紧接着又因采样率不同重开。
     current_track_rate: Option<u32>,
+    /// 独占采样率策略（设置项 exclusiveRate）：自适应 / 固定某个率。
+    /// 固定率刻意**不回退** —— 用户选它就是要那个率，悄悄换率比失败更糟。
+    rate_policy: RatePolicy,
+    /// 独占音量模式（设置项 exclusiveVolume）：软件音量 / 满幅直通。
+    volume_mode: VolumeMode,
+    /// 独占渲染线程逐样本乘的增益。改音量只改它的目标值，由渲染线程平滑跟随
+    /// （共享模式不走这里，音量还是 Player 自己乘）。
+    exclusive_gain: Arc<GainRamp>,
+    /// 本次独占会话走到哪一步（诊断文案用）
+    session_state: SessionState,
     /// 共享给命令层的输出状态（engine 线程写、命令层读）
     status: Arc<Mutex<OutputStatus>>,
 }
@@ -132,6 +148,11 @@ impl CoreAudio {
             mode: OutputMode::Shared,
             last_fallback: None,
             current_track_rate: None,
+            rate_policy: RatePolicy::Adaptive,
+            volume_mode: VolumeMode::Software,
+            // 起点与 set_volume 一致：1.0 满幅，之后由音量设置拉到位
+            exclusive_gain: GainRamp::new(1.0),
+            session_state: SessionState::Disabled,
             status,
         }
     }
@@ -228,6 +249,7 @@ impl CoreAudio {
                     // 记下原因并**回退共享**：独占失败不能让用户没声音
                     self.exclusive_denied = true;
                     self.last_fallback = Some(fb.hint().to_string());
+                    self.session_state = SessionState::Failed;
                     eprintln!("[engine] 独占输出不可用（{fb:?}）：{msg}；回退共享模式");
                 }
             }
@@ -313,10 +335,12 @@ impl CoreAudio {
         };
         // 声道数跟随设备共享默认格式：独占不做声道转换（这是 bit-perfect 的前提）
         let channels = shared_default_channels(device_id.as_deref()).unwrap_or(2).max(1) as usize;
-        let rates = exclusive_rate_candidates(
-            track_rate,
-            shared_default_rate(device_id.as_deref()),
-        );
+        // 采样率候选由策略决定：自适应 = 曲目率→设备默认率→48k→44.1k；
+        // 固定率只给一个候选 —— 用户选了那个率就是要它，悄悄换率比失败更糟。
+        let rates = self
+            .rate_policy
+            .candidates(track_rate, shared_default_rate(device_id.as_deref()));
+        self.session_state = SessionState::Negotiating;
 
         let mut errors: Vec<(Fallback, String)> = Vec::new();
         for rate in rates {
@@ -330,7 +354,9 @@ impl CoreAudio {
             for fmt in fmts {
                 // 每轮重建 bus：HallSource 与 mixer 是绑定的，不能把上一条的复用过来
                 let src = self.rebuild_bus(rate, channels);
-                match ExclusiveSink::start_at(device_id.clone(), src, rate, fmt, channels) {
+                // 增益交给渲染线程：独占时 Player 恒为 1.0，音量只在那一处乘
+                let gain = self.exclusive_gain.clone();
+                match ExclusiveSink::start_at(device_id.clone(), src, rate, fmt, channels, gain) {
                     Ok(sink) => {
                         let label = sink.format_label().to_string();
                         // 用 sink 自己报的 rate/channels 打日志：与真正开出来的设备状态一致
@@ -346,6 +372,7 @@ impl CoreAudio {
                         self.bus_owner = Some(Backend::Exclusive);
                         self.exclusive_track_rate = track_rate;
                         self.last_fallback = None;
+                        self.session_state = SessionState::Running;
                         self.publish(Backend::Exclusive, Some(label));
                         return Ok(());
                     }
@@ -377,6 +404,9 @@ impl CoreAudio {
         // bus 保留但不再被任何后端拉着；下一次打开输出会重建（见 rebuild_bus）
         self.bus_owner = None;
         self.exclusive_track_rate = None;
+        if self.session_state == SessionState::Running {
+            self.session_state = SessionState::Idle;
+        }
     }
 
     /// 当前播放总线（Player 接到它，混响挂在它下游）。
@@ -429,13 +459,22 @@ impl CoreAudio {
 
     /// 把当前后端/格式/回退原因写进共享状态槽
     fn publish(&self, backend: Backend, format: Option<String>) {
+        let session = self.exclusive_diagnostics();
         if let Ok(mut g) = self.status.lock() {
             g.opened = true;
             g.backend = backend;
             g.format = format;
             g.fallback = self.last_fallback.clone();
             g.output_rate = self.output_rate();
+            g.session = session;
         }
+    }
+
+    /// 独占会话的诊断快照（没有独占链路时 None）。
+    /// 命令层摸不到 CoreAudio，所以只能经由状态槽把它带出去。
+    fn exclusive_diagnostics(&self) -> Option<SessionDiagnostics> {
+        let sink = self.exclusive.as_ref()?;
+        Some(sink.diagnostics(self.session_state))
     }
 
     /// 记录「最近一次交给输出的音源」的采样率，并算出有没有发生重采样。
@@ -446,6 +485,9 @@ impl CoreAudio {
             g.source_rate = Some(src_rate);
             g.output_rate = out;
             g.resampling = out.map(|o| o != src_rate).unwrap_or(false);
+            // 换曲是个天然的刷新点：这里的欠载/超时计数只到「本次会话为止」，
+            // 比固定间隔轮询更省，也不会把上一次会话的数字混进来
+            g.session = self.exclusive_diagnostics();
         }
     }
 
@@ -472,11 +514,50 @@ impl CoreAudio {
         by_stream || by_exclusive
     }
 
+    /// 设置音量（0.0..=1.0）。
+    ///
+    /// 两种后端的音量落点不同，但用户看到的只有一个值：
+    /// - 共享：Player 自己乘（历史行为，逐位不变）
+    /// - 独占：Player 恒为 1.0，增益在渲染线程逐样本平滑地乘进去
+    ///   ⚠️ 独占时若还让 Player 乘一次，等于平方 —— 0.5 会变成 0.25，听着像「音量不线性」
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
+        // 独占链路：改的是渲染线程的目标增益，由它平滑跟上（不会有「咔」的一声）
+        self.exclusive_gain
+            .set(self.volume_mode.gain(self.volume));
+        let g = self.player_gain();
         if let Some(p) = &self.player {
-            p.set_volume(self.volume);
+            p.set_volume(g);
         }
+    }
+
+    /// Player 该乘多少：独占时是 1.0（音量已交给渲染线程），其余用真实音量。
+    fn player_gain(&self) -> f32 {
+        if self.bus_owner == Some(Backend::Exclusive) {
+            1.0
+        } else {
+            self.volume
+        }
+    }
+
+    /// 设置独占输出的两个策略（设置项 exclusiveVolume / exclusiveRate）。
+    /// 返回是否需要重新协商独占：**采样率策略变了就必须重开**，音量策略立刻生效。
+    pub fn set_exclusive_output(&mut self, volume: VolumeMode, rate: RatePolicy) -> bool {
+        let mut reopen = false;
+        if self.volume_mode != volume {
+            self.volume_mode = volume;
+            self.exclusive_gain
+                .set(self.volume_mode.gain(self.volume));
+            let g = self.player_gain();
+            if let Some(p) = &self.player {
+                p.set_volume(g);
+            }
+        }
+        if self.rate_policy != rate {
+            self.rate_policy = rate;
+            reopen = true;
+        }
+        reopen
     }
 
     /// 只停掉当前播放句柄，**保留输出**。
@@ -525,7 +606,8 @@ impl CoreAudio {
         self.open_output(prefer.as_deref(), track_rate)?;
         let mixer = self.active_mixer().expect("open_output 成功后必然有输出");
         let player = Player::connect_new(mixer);
-        player.set_volume(self.volume);
+        // 独占时这里必须是 1.0：音量已在渲染线程里乘（见 set_volume 的说明）
+        player.set_volume(self.player_gain());
         self.player = Some(player);
         Ok(())
     }
@@ -698,23 +780,6 @@ fn nz_channels(channels: usize) -> ChannelCount {
 /// u32 采样率 → rodio 的 SampleRate（NonZero）。0 视为 44100（调用方保证不会走到）。
 fn nz_rate(rate: u32) -> SampleRate {
     NonZero::new(rate).unwrap_or_else(|| NonZero::new(44_100).unwrap())
-}
-
-/// 独占协商的采样率候选，按优先级：曲目采样率 → 设备共享默认率 → 48000 → 44100。
-/// 去重、保序，并丢掉明显非法的值（< 8kHz）。
-///
-/// 为什么需要「设备共享默认率」这一档：设备原生率往往正是它唯一能独占的率；
-/// 而 48000/44100 是最后的兜底（宁可重采样，也不要一点声音都没有）。
-fn exclusive_rate_candidates(track_rate: Option<u32>, device_default: Option<u32>) -> Vec<u32> {
-    let mut out: Vec<u32> = Vec::new();
-    for r in [track_rate, device_default, Some(48_000), Some(44_100)] {
-        if let Some(r) = r {
-            if r >= 8_000 && !out.contains(&r) {
-                out.push(r);
-            }
-        }
-    }
-    out
 }
 
 /// 列出全部输出设备（设置页下拉用）。selected 是用户当前选中的 id。
@@ -1061,20 +1126,23 @@ mod tests {
     /// 独占采样率候选：曲目率优先、设备默认率次之、48k/44.1k 兜底；去重保序、丢掉非法值
     #[test]
     fn exclusive_rate_candidates_order() {
-        assert_eq!(exclusive_rate_candidates(Some(44_100), Some(48_000)), vec![44_100, 48_000]);
+        use crate::engine::exclusive_session::{adaptive_candidates, RatePolicy};
+        assert_eq!(adaptive_candidates(Some(44_100), Some(48_000)), vec![44_100, 48_000]);
         // 曲目率就是设备率时去重
-        assert_eq!(exclusive_rate_candidates(Some(48_000), Some(48_000)), vec![48_000, 44_100]);
+        assert_eq!(adaptive_candidates(Some(48_000), Some(48_000)), vec![48_000, 44_100]);
         // 曲目率本机不支持也有兜底：调用方按顺序往下试（宁可重采样也不要没声音）
         assert_eq!(
-            exclusive_rate_candidates(Some(88_200), Some(96_000)),
+            adaptive_candidates(Some(88_200), Some(96_000)),
             vec![88_200, 96_000, 48_000, 44_100]
         );
         // 读不到曲目率（例如恢复流程早期）：设备默认率打头
-        assert_eq!(exclusive_rate_candidates(None, Some(96_000)), vec![96_000, 48_000, 44_100]);
+        assert_eq!(adaptive_candidates(None, Some(96_000)), vec![96_000, 48_000, 44_100]);
         // 设备默认率也读不到：仍是 48k / 44.1k
-        assert_eq!(exclusive_rate_candidates(None, None), vec![48_000, 44_100]);
+        assert_eq!(adaptive_candidates(None, None), vec![48_000, 44_100]);
         // 非法值被丢掉
-        assert_eq!(exclusive_rate_candidates(Some(0), Some(1)), vec![48_000, 44_100]);
+        assert_eq!(adaptive_candidates(Some(0), Some(1)), vec![48_000, 44_100]);
+        // 固定率模式只给一个候选 —— 与自适应是两条不同的路径
+        assert_eq!(RatePolicy::Fixed(96_000).candidates(Some(44_100), Some(48_000)), vec![96_000]);
     }
 
     /// 换模式 / 换设备必须重新给独占一次机会，否则一次回退就永久钉死在共享上
@@ -1112,6 +1180,32 @@ mod tests {
         assert!(!st.opened, "共享也没开成功时不能把状态标成已打开");
     }
 
+    /// 独占时 Player 必须恒为 1.0 —— 音量已经在渲染线程里乘过了。
+    /// 若这里再乘一次，滑块就成了平方曲线：0.5 调到听起来像 0.25。
+    #[test]
+    fn player_gain_is_unity_on_exclusive_bus() {
+        let status = Arc::new(Mutex::new(OutputStatus::default()));
+        let mut core = CoreAudio::new(status);
+        core.set_volume(0.5);
+
+        core.bus_owner = Some(Backend::Shared);
+        assert!((core.player_gain() - 0.5).abs() < 1e-6, "共享路径照旧由 Player 乘");
+
+        core.bus_owner = Some(Backend::Exclusive);
+        assert_eq!(core.player_gain(), 1.0, "独占路径不许 Player 再乘一次");
+
+        // 独占 + 满幅直通：渲染线程的增益也必须是 1.0
+        assert!(
+            !core.set_exclusive_output(VolumeMode::Direct, RatePolicy::Adaptive),
+            "只改音量策略不该触发重开设备"
+        );
+        assert_eq!(core.exclusive_gain.target(), 1.0, "满幅直通：渲染线程也不衰减");
+        assert!(
+            core.set_exclusive_output(VolumeMode::Direct, RatePolicy::Fixed(96_000)),
+            "改采样率策略必须重开输出"
+        );
+    }
+
     /// 「重新尝试独占」要把上一次的回退结论清干净，否则设置页会一直挂着旧警告
     #[test]
     fn forget_fallback_clears_status_and_denial() {
@@ -1123,6 +1217,7 @@ mod tests {
             output_rate: Some(48_000),
             source_rate: Some(44_100),
             resampling: true,
+            session: None,
         }));
         let mut core = CoreAudio::new(status.clone());
         core.exclusive_denied = true;

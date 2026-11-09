@@ -168,6 +168,41 @@ export interface OutputStatus {
   sourceRate: number | null;
   /** sourceRate 与 outputRate 不一致 = 走了多相 sinc 重采样 */
   resampling: boolean;
+  /** 独占会话的诊断（缓冲 / 欠载 / 超时 / 健康度）；没走过独占时为 null */
+  session: SessionDiagnostics | null;
+}
+
+/** 独占会话的诊断快照（后端 SessionDiagnostics 的镜像） */
+export interface SessionDiagnostics {
+  /** 状态机取值：disabled / idle / negotiating / running / failed / detached */
+  state: string;
+  /** 上面那个状态的中文 */
+  stateLabel: string;
+  /** 实际格式，如 "48000/24/32" */
+  format: string | null;
+  rate: number | null;
+  /** 设备缓冲帧数与折算毫秒（越小越跟手，太小时容易欠载） */
+  bufferFrames: number;
+  bufferMs: number;
+  /** 本次会话累计写入的帧数 */
+  frames: number;
+  /** 缓冲满、这一轮没空位的次数（正常背压也会计数） */
+  zeroSpace: number;
+  /** 等待设备事件超时的次数（连续 5 次才会判掉线） */
+  timeouts: number;
+  writeErrors: number;
+  /** 一句话健康度，可直接显示 */
+  health: string;
+  /** 第一个失败原因（已归因） */
+  failure: string | null;
+}
+
+/** 独占输出的两个策略（设置页两个下拉） */
+export interface ExclusiveOutputSettings {
+  /** software = 渲染线程里调音量（默认）；direct = 满幅直通 */
+  volume: string;
+  /** adaptive = 跟随曲目；数字 = 锁死那个采样率 */
+  rate: string;
 }
 
 export interface LibraryStats {
