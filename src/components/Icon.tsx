@@ -3,8 +3,10 @@ import type { CSSProperties } from "react";
 
 export type IconName =
   | "home"
+  | "home-solid"
   | "search"
   | "library"
+  | "library-solid"
   | "settings"
   | "plus"
   | "shuffle"
@@ -73,6 +75,17 @@ const PATHS: Record<IconName, string> = {
   heart: "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
   // 与 heart 同一条路径，仅渲染方式不同（线框），供侧栏导航使用
   "heart-outline": "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 1 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
+  // 侧栏导航的实心版（2026-11 按用户要求实心化）：轮廓与线框版同源，只是填满。
+  // 房子的门洞是 Material 原路径自带的反向绕行段，nonzero 就能挖出来；
+  // 书的书脊缝在书身内部，必须靠 evenodd 才不被盖住。
+  "home-solid": "M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z",
+  // 三本并排的书：两本竖立（左高右略矮）+ 一本向右斜靠。
+  // 不用书脊缝：1.2 单位宽的白缝在 20px 下几乎不可见，反而把左侧那本切成两根细条，
+  // 体量比左边的房子/心形轻一档。这里靠块面本身的分量对齐。
+  "library-solid":
+    "M5.2 4h1.6A1.6 1.6 0 0 1 8.4 5.6v12.8A1.6 1.6 0 0 1 6.8 20H5.2a1.6 1.6 0 0 1-1.6-1.6V5.6A1.6 1.6 0 0 1 5.2 4z" +
+    "M11.6 5h1.6A1.6 1.6 0 0 1 14.8 6.6v11.8A1.6 1.6 0 0 1 13.2 20h-1.6a1.6 1.6 0 0 1-1.6-1.6V6.6A1.6 1.6 0 0 1 11.6 5z" +
+    "M14.645 5.801 18.155 4.999 21.355 18.999 17.845 19.801z",
   queue:
     "M4 18h4v-2H4v2zM4 13h10v-2H4v2zm0-5h16V6H4v2zm13 14h2v-2h2v-2h-2v-2h-2v2h-2v2h2v2zM7 9h4V7H7v2z",
   "volume-muted":
@@ -127,6 +140,8 @@ const SOLID_STYLE: Partial<Record<IconName, CSSProperties>> = {
   next: { fill: "currentColor", stroke: "currentColor", strokeWidth: 3.2, strokeLinejoin: "round", strokeLinecap: "round" },
   stop: { fill: "currentColor", stroke: "currentColor", strokeWidth: 2.7, strokeLinejoin: "round" },
   heart: { fill: "currentColor", stroke: "currentColor", strokeWidth: 1.4, strokeLinejoin: "round" },
+  "home-solid": { fill: "currentColor" },
+  "library-solid": { fill: "currentColor" },
 };
 
 /** 功能类图标：统一 1.9 圆头线框 */

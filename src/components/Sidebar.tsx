@@ -7,15 +7,20 @@ import { usePlaylistStore } from "../stores/playlistStore";
 import { toast } from "../stores/uiStore";
 type PrimaryNav = "home" | "albums" | "library" | "favorites";
 
-const NAV_ITEMS: { name: PrimaryNav; label: string; icon: "home" | "disc" | "library" | "heart-outline" }[] = [
-  { name: "home", label: "Home", icon: "home" },
+const NAV_ITEMS: {
+  name: PrimaryNav;
+  label: string;
+  icon: "home-solid" | "disc" | "library-solid" | "heart";
+}[] = [
+  { name: "home", label: "Home", icon: "home-solid" },
   // 搜索页改为专辑页：主区陈列全部专辑，搜索能力移到顶栏（有输入即整页切到搜索结果）。
   { name: "albums", label: "Albums", icon: "disc" },
-  { name: "library", label: "Library", icon: "library" },
-  // 收藏模块：与 Home / Search / Library 同属主导航，紧随 Library 之下。
-  // 图标用 heart-outline（1.9 线框），与左边三枚同一套语言 —— 实心 heart 留给
-  // 播放条与曲目行里那两枚「当前是否已收藏」的按钮。
-  { name: "favorites", label: "Favorite", icon: "heart-outline" },
+  { name: "library", label: "Library", icon: "library-solid" },
+  // 收藏模块：与 Home / Albums / Library 同属主导航，紧随 Library 之下。
+  // 2026-11：主导航按用户要求统一换成实心图标 —— 这枚用实心 heart。
+  // 播放条与曲目行里的收藏按钮不受影响：未收藏时仍是 heart-outline（线框），
+  // 已收藏才换成 heart，状态差异保留。
+  { name: "favorites", label: "Favorite", icon: "heart" },
 ];
 
 const GO: Record<PrimaryNav, () => void> = {

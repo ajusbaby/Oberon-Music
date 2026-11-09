@@ -1661,7 +1661,11 @@
        会得到四个不同的亮度，加上非整数缩放下边缘那半个物理像素的抗锯齿，
        右边和下边看起来就比左边和上边细一档。实色四边完全一致。 */
     --shell-border-width: 2px;
-    --shell-edge: #d5d8de;
+    --shell-edge: #cfd4dd;
+    /* 边线内侧再压一道 1px 高光：四边内侧的底色本来是三个不同的值（侧栏白 / 主区灰 /
+       播放条霜面），同样的线压在灰底上会比压在白底上显得细一档。垫一条亮线之后
+       四边都变成「深线 + 亮线」两段，粗细与浓度在视觉上才拉平。 */
+    --shell-inner-glow: rgba(255, 255, 255, 0.55);
     border: 0;
     box-shadow:
         0 12px 30px -24px rgba(0, 0, 0, 0.42),
@@ -1688,7 +1692,9 @@
     position: absolute;
     inset: 0;
     border-radius: var(--app-radius);
-    box-shadow: inset 0 0 0 var(--shell-border-width, 2px) var(--shell-edge, #d5d8de);
+    box-shadow:
+        inset 0 0 0 var(--shell-border-width, 2px) var(--shell-edge, #d5d8de),
+        inset 0 0 0 calc(var(--shell-border-width, 2px) + 1px) var(--shell-inner-glow, rgba(255, 255, 255, 0.55));
     pointer-events: none;
     z-index: 120;
 }
@@ -1724,6 +1730,9 @@
 .app-shell .sidebar {
     border-top-left-radius: calc(var(--app-radius) - var(--shell-border-width, 2px));
     border-bottom-left-radius: 0;
+    /* 侧栏有 backdrop-filter：它的背景快照不跟 border-radius 走，左上角会在圆角外
+       糊出一小块方形磨砂。和播放条一样，自己裁一次。 */
+    clip-path: inset(0 round calc(var(--app-radius) - var(--shell-border-width, 2px)) 0 0 0);
 }
 
 .app-shell .main-content {
@@ -1834,6 +1843,11 @@
     inset: 0;
     z-index: -1;
     border-radius: inherit;
+    /* ⚠️ 这行不是装饰：光雾是 z-index:-1，绘制在外壳底色「之下」，
+       父级的 clip-path 管不到这一层（四角能看见它漏出的白/浅灰扇形，
+       右上角最明显 —— 那块光最亮，露在深色桌面上一眼就是"方角没切干净"）。
+       自己再裁一次圆角，四个角才和窗口轮廓贴合。 */
+    clip-path: inset(0 round var(--app-radius));
     pointer-events: none;
     opacity: 0;
     transition: opacity 900ms ease;
@@ -2054,7 +2068,8 @@
     /* ② 材质层：外壳自己那层写死的白色亚克力渐变 */
     background: #131316;
     /* 深色下轮廓换成 14% 白，深底上才看得见边界 */
-    --shell-edge: #35353b;
+    --shell-edge: #45454e;
+    --shell-inner-glow: rgba(255, 255, 255, 0.07);
     box-shadow: 0 12px 30px -24px rgba(0, 0, 0, 0.6);
 }
 
