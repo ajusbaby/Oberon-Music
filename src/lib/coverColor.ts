@@ -4,22 +4,22 @@
 export interface CoverLook {
   pageRgb: string;
   pageHex: string;
-  /** 白纱不透明度：封面越亮洗得越少，纯深色封面最多洗到 0.9。 */
+  /** 白纱不透明度：封面越亮洗得越少，纯深色封面最多洗到 0.88。 */
   wash: number;
-  /** 72×72 的封面纹理（已 saturate），交给 FlowingLight 铺色。 */
+  /** 76×76 的封面纹理（已 saturate），交给 FlowingLight 铺色。 */
   texture: HTMLCanvasElement | null;
   /** alpha 加权平均色，CSS rgb() 使用逗号格式。 */
   avgCss: string;
   luma: number;
 }
 
-const TEX = 72;
-const SATURATE = 2.5;
+const TEX = 76;
+const SATURATE = 2.3;
 
 export const FALLBACK_LOOK: CoverLook = {
   pageRgb: "240 238 237",
   pageHex: "#f0eeed",
-  wash: 0.72,
+  wash: 0.74,
   texture: null,
   avgCss: "240,238,237",
   luma: 0.94,
@@ -34,7 +34,7 @@ function hexOf(r: number, g: number, b: number): string {
   return "#" + h(r) + h(g) + h(b);
 }
 
-/** 图片 → 72×72 纹理 + alpha 加权平均色 + 白纱强度。 */
+/** 图片 → 76×76 纹理 + alpha 加权平均色 + 白纱强度。 */
 export function lookFromImage(img: HTMLImageElement): CoverLook {
   const nw = img.naturalWidth;
   const nh = img.naturalHeight;
@@ -64,7 +64,7 @@ export function lookFromImage(img: HTMLImageElement): CoverLook {
   let weight = 0;
   for (let i = 0; i < data.length; i += 4) {
     const a = data[i + 3];
-    if (a < 12) continue;
+    if (a < 10) continue;
     sr += data[i] * a;
     sg += data[i + 1] * a;
     sb += data[i + 2] * a;
@@ -76,8 +76,8 @@ export function lookFromImage(img: HTMLImageElement): CoverLook {
   const g = sg / weight;
   const b = sb / weight;
   // sRGB 感知亮度：线性亮度会把所有中间色压到 0.2 附近，白纱就会一路拉满。
-  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  const wash = clamp((0.82 - luma) / (1 - luma), 0, 0.9);
+  const luma = (0.21 * r + 0.72 * g + 0.07 * b) / 255;
+  const wash = clamp((0.8 - luma) / (1 - luma), 0, 0.88);
   const mix = (v: number) => Math.round(v + (255 - v) * wash);
 
   return {
@@ -109,16 +109,7 @@ export async function sampleCover(url: string | null | undefined): Promise<Cover
   const img = await decode(url);
   if (!img) return FALLBACK_LOOK;
   const look = lookFromImage(img);
-  if (cache.size > 24) cache.clear();
+  if (cache.size > 20) cache.clear();
   cache.set(url, look);
   return look;
-}
-
-/** "#rrggbb" → "r g b"。 */
-export function hexToTriple(hex: string): string {
-  const h = hex.replace("#", "");
-  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
-  const n = Number.parseInt(full, 16);
-  if (!Number.isFinite(n)) return "255 255 255";
-  return ((n >> 16) & 255) + " " + ((n >> 8) & 255) + " " + (n & 255);
 }

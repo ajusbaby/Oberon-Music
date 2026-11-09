@@ -87,6 +87,17 @@ impl AppState {
             .unwrap_or(crate::engine::backend::OutputMode::Shared);
         engine.send(crate::engine::EngineCommand::SetOutputMode { mode: output_mode }).ok();
 
+        // 「音乐厅氛围」开关（设置项 concertHall；缺键 / 脏值 = off —— 默认不加任何加工）。
+        // 和上面两项一样必须在装载第一首之前送到：bus 是在打开输出时按当时的档位建立的，
+        // 晚到一步的话第一首歌会先以 dry 声出声、再被平滑拉进混响。
+        let concert_hall = db
+            .lock()
+            .ok()
+            .and_then(|g| crate::db::settings_get(&g, "concertHall").ok().flatten())
+            .map(|s| crate::engine::hall::HallMode::parse(&s))
+            .unwrap_or(crate::engine::hall::HallMode::Off);
+        engine.send(crate::engine::EngineCommand::SetConcertHall { mode: concert_hall }).ok();
+
         let (tx, rx) = std::sync::mpsc::channel::<WatchMsg>();
         Ok((
             AppState {

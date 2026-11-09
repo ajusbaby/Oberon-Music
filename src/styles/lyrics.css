@@ -34,12 +34,12 @@
     border-radius: 0;
     overflow: hidden;
 
-    /* 页面留白：左右 30dp、上下 16dp */
-    --sl-pad-x: 30px;
-    --sl-pad-y: 16px;
+    /* 页面留白：左右 32dp、上下 18dp */
+    --sl-pad-x: 32px;
+    --sl-pad-y: 18px;
     --sl-foot: var(--player-height, 120px);
-    /* 歌词基准字号 24sp × 用户倍率；当前行不放大，全列共用这一个值 */
-    --sl-fs: calc(24px * var(--lyric-size, 1));
+    /* 歌词基准字号 25sp × 用户倍率；当前行不放大，全列共用这一个值 */
+    --sl-fs: calc(25px * var(--lyric-size, 1));
 
     /* 歌词页恒为浅色：文字纯黑，与 App 明暗主题无关。
        底色不是写死的白，而是 --sl-page-rgb —— 封面平均色按需洗白后的结果
@@ -53,9 +53,9 @@
     --sl-cover-bg: rgba(0, 0, 0, 0.04);
     /* 渐隐层用"页面实际颜色"（白 + 12% accent，由组件算成 --sl-page-rgb），
        不是纯白：纯白会在 12% 的底色上洗出一条横向色差带。 */
-    --sl-fade: rgba(var(--sl-page-rgb, 255 255 255) / 0.90);
+    --sl-fade: rgba(var(--sl-page-rgb, 255 255 255) / 0.92);
     /* 底栏底晕：同上，只是更实一点，给底栏文字当底 */
-    --sl-foot-scrim: rgba(var(--sl-page-rgb, 255 255 255) / 0.94);
+    --sl-foot-scrim: rgba(var(--sl-page-rgb, 255 255 255) / 0.93);
 
     color: var(--sl-fg);
     -webkit-font-smoothing: antialiased;
@@ -75,7 +75,7 @@
     pointer-events: none;
     /* 页面基色，不是纯白：进场那一瞬间的颜色要和稳定态一致 */
     background: rgb(var(--sl-page-rgb, 255 255 255));
-    transition: background-color 520ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: background-color 480ms cubic-bezier(0.24, 1, 0.34, 1);
     opacity: 1;
 }
 
@@ -104,7 +104,7 @@
 }
 
 /* 流光：封面本身的三层旋转云雾（见 FlowingLight.tsx）。
-   画布内部已经按封面饱和度 2.5 铺色，全不透明输出；
+   画布内部已经按封面饱和度 2.3 铺色，全不透明输出；
    "浅"由上面那层白纱（.sl-stage::after 的 --sl-wash）负责。 */
 .sl-light {
     position: absolute;
@@ -115,7 +115,7 @@
     display: block;
     pointer-events: none;
     opacity: 1;
-    transition: opacity 600ms ease;
+    transition: opacity 560ms ease;
 }
 
 .lyrics-page.is-flat .sl-stage {
@@ -132,11 +132,11 @@
     pointer-events: none;
     background-color: rgb(var(--sl-page-rgb, 255 255 255));
     /* 换歌时颜色不要瞬切，跟白纱一起 520ms 缓收 */
-    transition: background-color 520ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: background-color 480ms cubic-bezier(0.24, 1, 0.34, 1);
 }
 
 /* 恒浅叠加：一层自适应白纱，强度来自封面亮度（--sl-wash，组件算好写进根节点）。
-   亮封面几乎不洗（wash 0，颜色原样），深封面最多洗到 0.9 —— 深紫变浅紫、纯黑变灰白。
+   亮封面几乎不洗（wash 0，颜色原样），深封面最多洗到 0.88 —— 深紫变浅紫、纯黑变灰白。
    白纱只统一明度，颜色和面积仍全部来自封面位图，也不随歌词滚动变化。
    层序：画布 z1 → 白纱 z2 → 歌词 z3 / 顶栏 z5。 */
 .sl-stage::after {
@@ -145,7 +145,7 @@
     inset: 0;
     z-index: 2;
     pointer-events: none;
-    background-color: rgba(255, 255, 255, var(--sl-wash, 0.7));
+    background-color: rgba(255, 255, 255, var(--sl-wash, 0.74));
 }
 
 /* ===== 顶栏 ===== */
@@ -159,7 +159,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    transition: opacity 320ms ease, transform 320ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 300ms ease, transform 300ms cubic-bezier(0.42, 0, 0.22, 1);
 }
 
 .sl-back,
@@ -186,9 +186,9 @@
 
 .sl-head strong {
     max-width: 40vw;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
-    letter-spacing: -0.01em;
+    letter-spacing: -0.012em;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -280,7 +280,7 @@
 /* ===== 歌词区 =====
    下边界收在底栏上沿：这样「几何中心」就是内容区的中心，
    位移公式里不必再补偿一个固定偏移。
-   整页居中：一栏定宽（820px 上限）落在窗口正中，左右只留 30dp 透气。 */
+   整页居中：一栏定宽（804px 上限）落在窗口正中，左右只留 32dp 透气。 */
 .sl-lyrics-area {
     position: absolute;
     left: 0;
@@ -299,7 +299,7 @@
     position: relative;
     z-index: 1;
     flex: 0 1 auto;
-    width: min(820px, 100%);
+    width: min(804px, 100%);
     min-width: 0;
     height: 100%;
     overflow: hidden;
@@ -315,14 +315,14 @@
     position: absolute;
     left: 0;
     right: 0;
-    height: 110px;
+    height: 104px;
     z-index: 2;
     pointer-events: none;
 }
 
 .sl-lyrics-area::before {
     top: 0;
-    background: linear-gradient(to bottom, var(--sl-fade), transparent 85%);
+    background: linear-gradient(to bottom, var(--sl-fade), transparent 88%);
 }
 
 .sl-lyrics-area::after {
@@ -345,7 +345,7 @@
    全列几十行同时起 opacity 过渡会把每一行都提成独立合成层 —— 只在"焦点附近"动，
    观感上这一小圈是慢慢聚拢的，远处仍是硬切换，肉眼分辨不出来但省掉一次合成风暴。 */
 .sl-g.is-near {
-    transition: opacity 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity 400ms cubic-bezier(0.24, 1, 0.34, 1);
 }
 
 /* 切歌：整列轻抬 10px 淡入（只挂在容器上 —— .sl-track 自己有位移，动它会和弹簧打架） */
@@ -377,16 +377,16 @@
     padding: 0;
     /* 焦点推进时各行透明度平滑过渡（只动 opacity，合成器就能做，不用重绘文字）。
        模糊不离散过渡：filter 每帧都要重新光栅化文本，几十行一起动会掉帧。 */
-    transition: opacity 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity 400ms cubic-bezier(0.24, 1, 0.34, 1);
 }
 
-/* 行内 padding = 6dp + 字号 × 0.1；当前句字号不变，只改颜色与字重 */
+/* 行内 padding = 7dp + 字号 × 0.11；当前句字号不变，只改颜色与字重 */
 .sl-line {
     margin: 0;
-    padding: calc(6px + var(--sl-fs) * 0.1) 0;
+    padding: calc(7px + var(--sl-fs) * 0.11) 0;
     font-size: var(--sl-fs);
-    line-height: 1.42;
-    letter-spacing: -0.01em;
+    line-height: 1.44;
+    letter-spacing: -0.012em;
     font-weight: var(--lyric-weight, 400);
     color: var(--sl-fg);
     white-space: normal;
@@ -396,7 +396,7 @@
 
 /* 加粗用相对量：用户选的 300 / 500 各自变粗一档，不会一律被拉成 700 */
 .sl-g.is-active .sl-line {
-    font-weight: calc(var(--lyric-weight, 400) + 150);
+    font-weight: calc(var(--lyric-weight, 400) + 140);
     color: var(--sl-fg);
 }
 
@@ -409,8 +409,8 @@
         90deg,
         rgb(var(--sl-fg-rgb, 0 0 0)) 0,
         rgb(var(--sl-fg-rgb, 0 0 0)) calc(var(--sl-k, 1) * 100%),
-        rgba(var(--sl-fg-rgb, 0 0 0) / 0.34) calc(var(--sl-k, 1) * 100% + 5%),
-        rgba(var(--sl-fg-rgb, 0 0 0) / 0.34) 100%
+        rgba(var(--sl-fg-rgb, 0 0 0) / 0.32) calc(var(--sl-k, 1) * 100% + 6%),
+        rgba(var(--sl-fg-rgb, 0 0 0) / 0.32) 100%
     );
     -webkit-background-clip: text;
     background-clip: text;
@@ -419,12 +419,12 @@
     transition: font-weight 220ms ease;
 }
 
-/* 翻译行：字号 ×0.8；上边距不再叠一份行内 padding */
+/* 翻译行：字号 ×0.82；上边距不再叠一份行内 padding */
 .sl-line.is-tr {
-    font-size: calc(var(--sl-fs) * 0.8);
+    font-size: calc(var(--sl-fs) * 0.82);
     padding-top: 0;
     /* 黑底字换到白底后 0.82 会和正文一个重量，译文要明显低一档 */
-    color: rgba(var(--sl-fg-rgb) / 0.62);
+    color: rgba(var(--sl-fg-rgb) / 0.64);
 }
 
 .sl-line.is-clickable {
@@ -507,7 +507,7 @@
     bottom: 0;
     height: var(--sl-foot);
     z-index: 6;
-    transition: opacity 320ms ease, transform 320ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 300ms ease, transform 300ms cubic-bezier(0.42, 0, 0.22, 1);
 }
 
 .lyrics-page .lyrics-footer .bottom-player {
@@ -683,7 +683,7 @@
 .lyrics-page.cleared .sl-lyrics-area::after {
     bottom: 0;
     height: 96px;
-    background: linear-gradient(to top, var(--sl-fade), transparent 85%);
+    background: linear-gradient(to top, var(--sl-fade), transparent 88%);
 }
 
 /* ===== 分层入场：错峰淡入 + 上浮 =====
@@ -703,7 +703,7 @@
 @keyframes sl-light-rise {
     from {
         opacity: 0;
-        transform: scale(1.06);
+        transform: scale(1.05);
     }
     to {
         /* 必须回到元素自身的 1，否则进场结束后会骤然变淡 */
@@ -713,19 +713,19 @@
 }
 
 .lyrics-page.staged .sl-light {
-    animation: sl-light-rise 900ms cubic-bezier(0.22, 1, 0.36, 1) 40ms both;
+    animation: sl-light-rise 880ms cubic-bezier(0.24, 1, 0.34, 1) 46ms both;
 }
 
 .lyrics-page.staged .sl-topbar {
-    animation: sl-layer-in 720ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
+    animation: sl-layer-in 700ms cubic-bezier(0.24, 1, 0.34, 1) 118ms both;
 }
 
 .lyrics-page.staged .sl-lyrics-area {
-    animation: sl-layer-in 720ms cubic-bezier(0.22, 1, 0.36, 1) 240ms both;
+    animation: sl-layer-in 700ms cubic-bezier(0.24, 1, 0.34, 1) 236ms both;
 }
 
 .lyrics-page.staged .sl-footer {
-    animation: sl-layer-in 720ms cubic-bezier(0.22, 1, 0.36, 1) 340ms both;
+    animation: sl-layer-in 700ms cubic-bezier(0.24, 1, 0.34, 1) 334ms both;
 }
 
 /* 注：.staged 的动画是 both 填充，从加类到动画开始之间元素停在 from 状态。
@@ -765,7 +765,7 @@
 }
 
 /* ===== 窄窗口：留白收窄，底栏只留控件与进度 ===== */
-@media (max-width: 820px) {
+@media (max-width: 800px) {
     .lyrics-page {
         --sl-pad-x: 20px;
     }

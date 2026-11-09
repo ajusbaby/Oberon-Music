@@ -79,7 +79,7 @@ export function Sidebar() {
           <span className="playlist-label">Playlists</span>
           <button
             className="playlist-add-btn"
-            title="创建播放列表"
+            aria-label="创建播放列表"
             onClick={() => openDialog({ kind: "create-playlist" })}
           >
             <Icon name="plus" />
@@ -111,7 +111,6 @@ export function Sidebar() {
                 </button>
                 <button
                   className="playlist-del-btn"
-                  title={"删除播放列表「" + p.name + "」"}
                   aria-label={"删除播放列表 " + p.name}
                   onClick={(e) => {
                     e.stopPropagation();

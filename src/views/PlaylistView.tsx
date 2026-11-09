@@ -92,7 +92,7 @@ export function PlaylistView() {
           </div>
           <div className="detail-actions">
             {canGoBack && (
-              <button className="back-btn" title="返回" onClick={back}>
+              <button className="back-btn" aria-label="返回" onClick={back}>
                 <Icon name="chevron-left" />
               </button>
             )}

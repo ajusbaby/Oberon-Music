@@ -28,7 +28,7 @@ export function AlbumGrid({ albums, onOpen, onPlay, emptyText = "还没有专辑
           <Cover className="album-cover" trackId={album.id} seed={album.id}>
             <button
               className="album-cover-play"
-              title="播放专辑"
+              aria-label="播放专辑"
               onClick={(e) => {
                 e.stopPropagation();
                 onPlay(album);

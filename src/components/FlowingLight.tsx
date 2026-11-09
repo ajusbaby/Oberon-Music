@@ -3,12 +3,12 @@ import { isWindowInvisible, onWindowVisibilityChange } from "../lib/winFocus";
 
 // 流光背景：封面位图本身当颜料。
 // 下采样 → 提饱和 → 一次性大模糊 → 三层不同字号/相位反向旋转叠色 → 25% 拖影 → 放大铺满。
-const DOWN = 14;
-const PAINT_SCALE = 1.8;
-const BLUR_RATIO = 0.135;
-const FPS = 24;
-const FADE_MS = 500;
-const TRAIL_ALPHA = 0.25;
+const DOWN = 15;
+const PAINT_SCALE = 1.85;
+const BLUR_RATIO = 0.13;
+const FPS = 25;
+const FADE_MS = 460;
+const TRAIL_ALPHA = 0.22;
 
 interface Layer {
   /** 每秒转过的角度。 */
@@ -24,12 +24,12 @@ interface Layer {
   round: boolean;
 }
 
-// 第一层铺满全屏（缩放 1.35 时方角永远在视口外），后两层偏移很大，
+// 第一层铺满全屏（缩放 1.32 时方角永远在视口外），后两层偏移很大，
 // 必须裁成柔边圆形，否则旋转时能看到一块方形色斑的边缘。
 const LAYERS: Layer[] = [
-  { spin: 360 / 100, scale: 1.35, alpha: 1, ox: 0, oy: 0, round: false },
-  { spin: -360 / 70, scale: 1.55, alpha: 0.3, ox: -0.95, oy: -0.7, round: true },
-  { spin: -360 / 40, scale: 1.75, alpha: 0.2, ox: -0.5, oy: 0.7, round: true },
+  { spin: 360 / 96, scale: 1.32, alpha: 1, ox: 0, oy: 0, round: false },
+  { spin: -360 / 67, scale: 1.58, alpha: 0.28, ox: -0.92, oy: -0.72, round: true },
+  { spin: -360 / 38, scale: 1.72, alpha: 0.22, ox: -0.52, oy: 0.68, round: true },
 ];
 
 export interface FlowingLightProps {
@@ -131,7 +131,7 @@ export function FlowingLight({ texture, base }: FlowingLightProps) {
     }
   }, []);
 
-  // 模糊只做一次：把 72×72 纹理放大到中等画布后整体虚化，逐帧旋转这张已经糊掉的图。
+  // 模糊只做一次：把 76×76 纹理放大到中等画布后整体虚化，逐帧旋转这张已经糊掉的图。
   const buildPaint = useCallback((cols: number, rows: number) => {
     const texture = textureRef.current;
     if (!texture) {
@@ -149,7 +149,7 @@ export function FlowingLight({ texture, base }: FlowingLightProps) {
     ctx.fillRect(0, 0, size, size);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    const scale = Math.max(size / texture.width, size / texture.height) * 1.12;
+    const scale = Math.max(size / texture.width, size / texture.height) * 1.15;
     const drawW = texture.width * scale;
     const drawH = texture.height * scale;
     ctx.filter = "blur(" + (size * BLUR_RATIO).toFixed(2) + "px)";
@@ -167,10 +167,10 @@ export function FlowingLight({ texture, base }: FlowingLightProps) {
       return;
     }
     rctx.drawImage(cv, 0, 0);
-    const mask = rctx.createRadialGradient(size / 2, size / 2, size * 0.16, size / 2, size / 2, size * 0.5);
+    const mask = rctx.createRadialGradient(size / 2, size / 2, size * 0.18, size / 2, size / 2, size * 0.5);
     mask.addColorStop(0, "rgba(0,0,0,1)");
-    mask.addColorStop(0.58, "rgba(0,0,0,0.94)");
-    mask.addColorStop(0.82, "rgba(0,0,0,0.55)");
+    mask.addColorStop(0.6, "rgba(0,0,0,0.92)");
+    mask.addColorStop(0.8, "rgba(0,0,0,0.58)");
     mask.addColorStop(1, "rgba(0,0,0,0)");
     rctx.globalCompositeOperation = "destination-in";
     rctx.fillStyle = mask;
@@ -241,7 +241,7 @@ export function FlowingLight({ texture, base }: FlowingLightProps) {
     const frame = (now: number) => {
       rafRef.current = 0;
       const elapsed = now - startRef.current;
-      // 还没到 24fps 的下一个节拍：继续等，但任何时刻只挂一帧
+      // 还没到 25fps 的下一个节拍：继续等，但任何时刻只挂一帧
       if (!reduced && elapsed - lastRef.current < 1000 / FPS - 1) {
         rafRef.current = requestAnimationFrame(frame);
         return;

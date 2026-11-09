@@ -105,22 +105,22 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
   return (
     <div className={"bottom-player" + (inLyrics ? " in-lyrics" : "")}>
       <div className="player-controls">
-        <button className="ctrl-btn" title="上一首" onClick={() => void previous()}>
+        <button className="ctrl-btn" aria-label="上一首" onClick={() => void previous()}>
           <Icon name="prev" />
         </button>
         <button
           className="ctrl-btn play-btn"
-          title={status === "playing" ? "暂停" : hasTrack ? "播放" : "播放（当前专辑 / 音乐库）"}
+          aria-label={status === "playing" ? "暂停" : "播放"}
           onClick={() => void toggle()}
         >
           <Icon name={status === "playing" ? "pause" : "play"} />
         </button>
-        <button className="ctrl-btn" title="下一首" onClick={() => void next()}>
+        <button className="ctrl-btn" aria-label="下一首" onClick={() => void next()}>
           <Icon name="next" />
         </button>
         <button
           className="ctrl-btn mode-btn active"
-          title={"播放模式：" + modeLabel(playMode) + "（点击切换）"}
+          aria-label={"播放模式：" + modeLabel(playMode)}
           onClick={() => void usePlayerStore.getState().setPlayMode(nextMode(playMode))}
         >
           <Icon name={modeIcon(playMode)} />
@@ -130,7 +130,6 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
 
       <div
         className="player-track"
-        title={inLyrics ? undefined : "展开歌词页"}
         style={inLyrics ? undefined : { cursor: "pointer" }}
         onClick={
           inLyrics
@@ -169,7 +168,7 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
 
       <button
         className={"favorite-btn" + (favorited ? " favorited" : "")}
-        title={favorited ? "取消收藏" : "收藏"}
+        aria-label={favorited ? "取消收藏" : "收藏"}
         onClick={onToggleFavorite}
       >
         <Icon name="heart" />
@@ -194,7 +193,7 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
         {inLyrics && (
           <button
             className="right-icon-btn"
-            title="输出设备"
+            aria-label="输出设备"
             onClick={() => toast("当前使用系统默认输出设备", "info")}
           >
             <Icon name="speaker" />
@@ -203,7 +202,7 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
         <div className="volume-control">
           <button
             className="right-icon-btn"
-            title={volume === 0 ? "取消静音" : "静音"}
+            aria-label={volume === 0 ? "取消静音" : "静音"}
             onClick={() => {
               const now = player?.volume ?? 70;
               if (now === 0) {
@@ -224,7 +223,7 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
             min={0}
             max={100}
             value={volume}
-            title="音量"
+            aria-label="音量"
             onChange={(e) => onVolumeInput(Number(e.target.value))}
           />
         </div>

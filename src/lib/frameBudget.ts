@@ -111,8 +111,3 @@ export function frameBudget(now: number): boolean {
   return true;
 }
 
-/** 仅供调试/测试：当前观测到的刷新率与放行帧率 */
-export function frameBudgetInfo(): { refreshHz: number; gateHz: number } {
-  const k = releaseDivisor(periodMs);
-  return { refreshHz: 1000 / periodMs, gateHz: 1000 / (k * periodMs) };
-}

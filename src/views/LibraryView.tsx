@@ -278,7 +278,7 @@ export function LibraryView() {
           <button
             ref={sortBtnRef}
             className="pill-btn"
-            title={"排序方式：" + sortLabel}
+            aria-label={"排序方式：" + sortLabel}
             onClick={(e) => {
               if (sortMenu) {
                 setSortMenu(null);

@@ -210,7 +210,7 @@ export function TrackList({
                   <div className="track-actions">
                     <button
                       className={"icon-only-btn" + (isFavorite(track.id) ? " favorited" : "")}
-                      title={isFavorite(track.id) ? "取消收藏" : "收藏"}
+                      aria-label={isFavorite(track.id) ? "取消收藏" : "收藏"}
                       onClick={(e) => {
                         e.stopPropagation();
                         toggle(track.id);
@@ -222,7 +222,7 @@ export function TrackList({
                       <>
                         <button
                           className="icon-only-btn"
-                          title="上移"
+                          aria-label="上移"
                           onClick={(e) => {
                             e.stopPropagation();
                             onMove(track, -1);
@@ -232,7 +232,7 @@ export function TrackList({
                         </button>
                         <button
                           className="icon-only-btn"
-                          title="下移"
+                          aria-label="下移"
                           onClick={(e) => {
                             e.stopPropagation();
                             onMove(track, 1);
@@ -245,7 +245,7 @@ export function TrackList({
                     {onRemove && (
                       <button
                         className="icon-only-btn"
-                        title="从播放列表移除"
+                        aria-label="从播放列表移除"
                         onClick={(e) => {
                           e.stopPropagation();
                           onRemove(track);
@@ -256,7 +256,7 @@ export function TrackList({
                     )}
                     <button
                       className="icon-only-btn"
-                      title="更多"
+                      aria-label="更多"
                       onClick={(e) => {
                         e.stopPropagation();
                         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();

@@ -48,6 +48,14 @@ export async function audioSetOutputMode(mode: string): Promise<void> {
 export async function audioRetryOutput(): Promise<void> {
   return invoke("audio_retry_output");
 }
+/** 读取「音乐厅氛围」开关（on / off） */
+export async function audioConcertHall(): Promise<string> {
+  return invoke("audio_concert_hall");
+}
+/** 设置「音乐厅氛围」开关；不重开设备，混响在总线上即时切换 */
+export async function audioSetConcertHall(mode: string): Promise<void> {
+  return invoke("audio_set_concert_hall", { mode });
+}
 /** 当前输出后端状态：实际在用的后端 / 独占格式 / 回退原因（设置页「独占输出」显示） */
 export async function audioOutputStatus(): Promise<OutputStatus> {
   return invoke("audio_output_status");
@@ -62,9 +70,6 @@ export async function tracksList(filter: TrackFilter = {}): Promise<Paginated<Tr
 /** 播放次数 +1。曲目**真正开始播放**时由 playerStore 调一次（见那里的播放计数）。 */
 export async function trackPlayed(id: number): Promise<void> {
   return invoke("track_played", { id });
-}
-export async function trackGet(id: number): Promise<Track> {
-  return invoke("track_get", { id });
 }
 /** 按 id 集合取歌曲（保持传入顺序，已不在曲库的 id 被跳过）—— 收藏模块用 */
 export async function tracksByIds(ids: number[]): Promise<Track[]> {
@@ -104,9 +109,6 @@ export async function playlistGet(id: number): Promise<PlaylistDetail> {
 export async function playlistAddTracks(id: number, trackIds: number[]): Promise<void> {
   return invoke("playlist_add_tracks", { id, trackIds });
 }
-export async function playlistAddTrackLocation(id: number, trackId: number, afterTrackId?: number): Promise<void> {
-  return invoke("playlist_add_track_location", { id, trackId, afterTrackId });
-}
 export async function playlistRemoveTrack(id: number, trackId: number): Promise<void> {
   return invoke("playlist_remove_track", { id, trackId });
 }
@@ -122,9 +124,6 @@ export async function playerPlayTrack(trackId: number, queueTrackIds?: number[])
 }
 export async function playerPlayAlbum(albumId: number, startTrackId: number): Promise<QueuePosition> {
   return invoke("player_play_album", { albumId, startTrackId });
-}
-export async function playerPlayPlaylist(playlistId: number, startTrackId: number): Promise<QueuePosition> {
-  return invoke("player_play_playlist", { playlistId, startTrackId });
 }
 export async function playerPlayAll(startTrackId: number): Promise<QueuePosition> {
   return invoke("player_play_all", { startTrackId });
@@ -164,9 +163,6 @@ export async function playerCover(trackId: number): Promise<string | null> {
   return invoke("player_cover", { trackId }); // data:image/...;base64
 }
 
-export async function settingsGet(key: string): Promise<string | null> {
-  return invoke("settings_get", { key });
-}
 export async function settingsSet(key: string, value: string): Promise<void> {
   return invoke("settings_set", { key, value });
 }

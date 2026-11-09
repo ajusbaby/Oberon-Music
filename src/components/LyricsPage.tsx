@@ -8,7 +8,7 @@
 //   · 背景三层：底色（黑/白）→ 流光（FlowingLight）→ 内容。
 //     流光自己带压暗蒙层，所以播放页**没有**额外的 scrim，也没有卡片、分割线、渐变按钮。
 //   · 歌词：基准 24 × 倍率，当前句**不放大**，靠"阶梯模糊 + 0.05 alpha 差 + 加粗"区分；
-//     相邻 1/2/3/≥4 行分别是 1.6 / 3.2 / 4.8 / 6.0 的模糊。
+//     相邻 1/2/3/≥4 行分别是 1.7 / 3.3 / 4.9 / 6.2 的模糊。
 //   · 滚动用弹簧（ζ=1.1，k=200）而不是匀速跟随：过阻尼意味着永远不过冲、不回弹。
 //   · 页面留白 30dp，封面圆角 12dp / 描边 2dp，底部固定 120（= 项目里的 --player-height）。
 //
@@ -40,37 +40,37 @@ import {
 import { useUiStore, toast } from "../stores/uiStore";
 
 /** 鼠标静止多久后进入沉浸模式（3s） */
-const IMMERSIVE_DELAY = 3000;
+const IMMERSIVE_DELAY = 3200;
 
 /* ===== 歌词滚动 =====
-   Salt 用的是弹簧：dampingRatio 1.1、stiffness 200。ζ>1 = 过阻尼，永远不会过冲回弹，
+   滚动用的是过阻尼弹簧（ζ≈1.12、k≈190）。ζ>1 = 永远不会过冲回弹，
    换句时是一段"快起、慢收"的位移，而不是我们原来那条匀速直线。
-   换算成这里的微分方程：m=1，c = 2ζ√k ≈ 31.1，a = -k·x - c·v。
+   换算成这里的微分方程：m=1，c = 2ζ√k ≈ 30.9，a = -k·x - c·v。
    （逐行错峰延迟（50ms/1.05^k）没有做：那会给十几行同时挂 transform 动画，
     和本项目"歌词只动一层 transform、一次 reflow"的约束直接冲突，收益也看不出来。） */
-const SPRING_K = 200;
-const SPRING_ZETA = 1.1;
+const SPRING_K = 190;
+const SPRING_ZETA = 1.12;
 const SPRING_C = 2 * SPRING_ZETA * Math.sqrt(SPRING_K);
 /** 单帧最大步进（毫秒）：窗口卡顿/后台恢复后不至于瞬移 */
 const SPRING_DT_MAX = 48;
 /** 速度上限（px/s）：从第一句直接跳到第 300 句时，别让整列文字糊成一条线 */
-const SPRING_VMAX = 7000;
-/** 最后一句没有下一句时，假定这一句唱 5.5s（扫过动画不会卡在中间） */
-const LAST_LINE_MS = 5500;
+const SPRING_VMAX = 6800;
+/** 最后一句没有下一句时，假定这一句唱 5.2s（扫过动画不会卡在中间） */
+const LAST_LINE_MS = 5200;
 
 /**
- * 阶梯模糊（px）：当前句 0，往外 1.6 / 3.2 / 4.8 / 6.0。
+ * 阶梯模糊（px）：当前句 0，往外 1.7 / 3.3 / 4.9 / 6.2。
  *
  * 和原来"近 5px、每行 +2、上限 12"的区别：Salt 的模糊是**很轻**的一层雾，
  * 靠的是"只有当前句是实的"这个对比，而不是把远处糊成色块。糊到 12px 时，
  * 一屏之内所有非当前行都变成同样的灰条，行数信息就没了。
  */
-const BLUR_STEPS = [1.6, 3.2, 4.8, 6.0];
+const BLUR_STEPS = [1.7, 3.3, 4.9, 6.2];
 /** 只有离当前句这么近的行才真的挂 filter（见 blurFor 的注释）。 */
-const BLUR_LIMIT = 8;
+const BLUR_LIMIT = 7;
 
 /** 滚轮回位时长（毫秒） */
-const WHEEL_RETURN_MS = 520;
+const WHEEL_RETURN_MS = 500;
 
 /* ===== 圆形扩散（进场） =====
    圆盘是预先画好的位图，动画只改 transform: scale()，内容不参与缩放 ——
@@ -504,7 +504,7 @@ export function LyricsPage() {
               : t0 + LAST_LINE_MS;
           // 扫过的时长取「本句到下一句」的间隔，但夹在 0.9s–4.5s：
           // 前奏/间奏里一句歌词可能挂着十几秒，按真实间隔扫会慢得像没在动。
-          const swept = Math.max(900, Math.min(4500, t1 - t0));
+          const swept = Math.max(950, Math.min(4300, t1 - t0));
           const k = Math.max(0, Math.min(1, (ms - t0) / swept));
           if (Math.abs(k - el.k) > 0.004 || k === 1) {
             el.k = k;
@@ -591,7 +591,7 @@ export function LyricsPage() {
   }, [open, lyrics]);
 
   /**
-   * 阶梯模糊：0 / 1.6 / 3.2 / 4.8 / 6.0。滚轮手动浏览或低功耗时整体关掉。
+   * 阶梯模糊：0 / 1.7 / 3.3 / 4.9 / 6.2。滚轮手动浏览或低功耗时整体关掉。
    * focus 是"视觉焦点句"：正常就是当前句，但在**前奏期间**（activeGroup 还是 -1，
    * 第一句还没到）取第 0 句 —— 否则整首歌开头几十秒里所有行都不模糊、全部 alpha 1，
    * 看上去就像"模糊没加载出来"（Deep End 那种长前奏最明显）。
@@ -611,7 +611,7 @@ export function LyricsPage() {
   );
 
   /**
-   * 透明度：每远离一句只退 9%，到 0.5 停住。
+   * 透明度：每远离一句只退 8.8%，到 0.52 停住。
    * 台阶感来自这里 —— 四档跳变会让滚动时像一格一格掉亮度。
    */
   const alphaFor = useCallback(
@@ -619,8 +619,8 @@ export function LyricsPage() {
       if (focus < 0) return 1;
       const d = Math.abs(groupIndex - focus);
       if (d === 0) return 1;
-      const a = 1 - 0.09 * d;
-      return a < 0.5 ? 0.5 : a;
+      const a = 1 - 0.088 * d;
+      return a < 0.52 ? 0.52 : a;
     },
     []
   );
@@ -706,7 +706,7 @@ export function LyricsPage() {
 
         <header className="sl-topbar">
           <div className="sl-back">
-            <button className="sl-icon-btn" title="返回" aria-label="返回" onClick={closeLyrics}>
+            <button className="sl-icon-btn" aria-label="返回" onClick={closeLyrics}>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M15 5 8 12l7 7" />
               </svg>
@@ -720,7 +720,6 @@ export function LyricsPage() {
           <div className="sl-actions">
             <button
               className="sl-icon-btn"
-              title={cleared ? "退出沉浸（Esc）" : "沉浸：清屏只留歌词"}
               aria-label={cleared ? "退出沉浸" : "沉浸清屏"}
               onClick={() => setCleared((v) => !v)}
             >
@@ -731,7 +730,7 @@ export function LyricsPage() {
 
         {/* 沉浸清屏：只保留一个极简退出按钮（也可按 Esc） */}
         {cleared && (
-          <button className="sl-clear-exit" title="退出沉浸（Esc）" onClick={() => setCleared(false)}>
+          <button className="sl-clear-exit" aria-label="退出沉浸" onClick={() => setCleared(false)}>
             <Icon name="minimize" />
           </button>
         )}
@@ -791,7 +790,6 @@ export function LyricsPage() {
                             className={"sl-line" + (k > 0 ? " is-tr" : "") + (synced ? " is-clickable" : "")}
                             lang={slotLang(slot)}
                             style={{ fontFamily: lineStacks[index] }}
-                            title={synced ? "点击跳到这句" : undefined}
                             onClick={
                               synced
                                 ? () => {

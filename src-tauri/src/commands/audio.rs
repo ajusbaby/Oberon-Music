@@ -75,6 +75,37 @@ pub async fn audio_set_output_mode(state: State<'_, Arc<AppState>>, mode: String
     Ok(())
 }
 
+/// 设置键：「音乐厅氛围」开关（on / off；缺键 = off）
+pub const KEY_CONCERT_HALL: &str = "concertHall";
+
+/// 读取当前混响开关（缺键或脏值一律回落到 off）
+#[tauri::command]
+pub async fn audio_concert_hall(state: State<'_, Arc<AppState>>) -> AppResult<String> {
+    Ok(state
+        .db
+        .lock()
+        .ok()
+        .and_then(|g| crate::db::settings_get(&g, KEY_CONCERT_HALL).ok().flatten())
+        .map(|s| crate::engine::hall::HallMode::parse(&s).as_str().to_string())
+        .unwrap_or_else(|| "off".to_string()))
+}
+
+/// 设置混响开关。脏值一律落到 off 再写库。
+/// ⚠️ 这条不重开设备：混响挂在播放总线上，参数由音频线程平滑过渡（见 engine/hall.rs）。
+/// 所以切换是即时的，正在播的歌不会被掐断。
+#[tauri::command]
+pub async fn audio_set_concert_hall(
+    state: State<'_, Arc<AppState>>,
+    mode: String,
+) -> AppResult<()> {
+    let parsed = crate::engine::hall::HallMode::parse(&mode);
+    let mode = parsed.as_str().to_string();
+    let db = state.db.clone();
+    db_run(db, move |c| Ok(crate::db::settings_set(c, KEY_CONCERT_HALL, &mode)?)).await?;
+    state.engine.send(EngineCommand::SetConcertHall { mode: parsed })?;
+    Ok(())
+}
+
 /// 让引擎重新协商一次输出后端（重开输出并尽量回到原位置）。
 /// 用途：用户在 Windows 里改完独占设置之后，不用重启 app 也能重新尝试独占，
 /// 并让设置页里那条「回退原因」重新算一遍。

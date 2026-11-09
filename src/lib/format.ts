@@ -21,19 +21,6 @@ export function formatTotalDuration(seconds: number): string {
   return total + " 秒";
 }
 
-/** 文件体积 */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return (i === 0 ? value.toFixed(0) : value.toFixed(1)) + " " + units[i];
-}
-
 /** 时间戳（毫秒）→ 2024/06/15 */
 export function formatDate(ms: number): string {
   if (!ms) return "—";
@@ -57,11 +44,6 @@ export function pickIndex(seed: number, count: number): number {
   if (count <= 0) return 0;
   const x = Math.abs(Math.trunc(seed)) % count;
   return x;
-}
-
-/** 数字安全化：null/NaN → 0 */
-export function num(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 

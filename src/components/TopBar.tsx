@@ -53,7 +53,7 @@ export function TopBar({ maximized }: { maximized: boolean }) {
         {query.length > 0 && (
           <button
             className="icon-only-btn"
-            title="清空"
+            aria-label="清空"
             onClick={(e) => {
               e.stopPropagation();
               setQuery("");
@@ -65,19 +65,18 @@ export function TopBar({ maximized }: { maximized: boolean }) {
       </div>
 
       <div className="window-controls">
-        <button className="window-btn" title="最小化" onClick={() => void appWindow.minimize()}>
+        <button className="window-btn" aria-label="最小化" onClick={() => void appWindow.minimize()}>
           <Icon name="minimize" />
         </button>
         <button
           className="window-btn"
-          title={maximized ? "还原" : "最大化"}
           aria-label={maximized ? "还原" : "最大化"}
           onClick={() => void appWindow.toggleMaximize()}
         >
           {/* 最大化时换成朝内的括号，否则按钮看起来「点了没反应」 */}
           <Icon name={maximized ? "fullscreen-exit" : "maximize"} />
         </button>
-        <button className="window-btn close-btn" title="关闭" onClick={() => void appWindow.close()}>
+        <button className="window-btn close-btn" aria-label="关闭" onClick={() => void appWindow.close()}>
           <Icon name="close" />
         </button>
       </div>

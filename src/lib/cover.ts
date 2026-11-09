@@ -84,13 +84,6 @@ export function loadCover(trackId: number): Promise<string | null> {
   return task;
 }
 
-/** 预取一批封面（进入视图时调用，避免列表逐行闪烁） */
-export function prefetchCovers(trackIds: number[]): void {
-  trackIds.slice(0, 60).forEach((id) => {
-    if (!cache.has(id)) void loadCover(id);
-  });
-}
-
 /** React Hook：解析封面 data URL；无封面返回 null（由调用方决定占位） */
 export function useCover(trackId: number | null | undefined): string | null {
   const [url, setUrl] = useState<string | null>(() =>

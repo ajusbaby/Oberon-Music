@@ -13,6 +13,7 @@ mod scanner;
 mod smtc;
 mod state;
 mod watcher;
+mod window_fit;
 
 use state::AppState;
 use std::sync::Arc;
@@ -27,6 +28,30 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // 窗口此刻已经按 tauri.conf.json 建好但还没显示（visible:false）。
+            // 先把尺寸压进显示器工作区再 show，避免用户看见一次「出屏 → 跳回来」。
+            // 先 show 再量：窗口没有显示时 Windows 不给它分配监视器，
+            // current_monitor / primary_monitor 都会返回 None（实测过）。
+            // 窗口是 transparent 的，这一帧还没画出内容，用户看不到跳变。
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.show();
+                if !window_fit::fit_window(&win).unwrap_or(false) {
+                    // setup 阶段偶尔还拿不到 Monitor（窗口刚 show，Windows 还没把它
+                    // 挂到显示器上）。退一步：等它第一次真正获得焦点再量一次。
+                    let w = win.clone();
+                    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    win.on_window_event(move |e| {
+                        if !matches!(e, tauri::WindowEvent::Focused(true)) {
+                            return;
+                        }
+                        if done.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                            return;
+                        }
+                        let _ = window_fit::fit_window(&w);
+                    });
+                }
+            }
+
             let handle = app.handle().clone();
             let (state, watch_rx) = AppState::init(&handle)?;
             let state = Arc::new(state);
@@ -180,6 +205,9 @@ pub fn run() {
             commands::audio::audio_set_output_mode,
             commands::audio::audio_output_status,
             commands::audio::audio_retry_output,
+            // 「音乐厅氛围」混响档位
+            commands::audio::audio_concert_hall,
+            commands::audio::audio_set_concert_hall,
             // 设置
             commands::settings::settings_get,
             commands::settings::settings_set,

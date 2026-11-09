@@ -13,6 +13,7 @@ pub mod beat;
 pub mod downmix;
 pub mod dsd;
 pub mod exclusive;
+pub mod hall;
 pub mod opus;
 pub mod resample;
 
@@ -61,6 +62,9 @@ pub enum EngineCommand {
     /// SetOutputMode 不会触发重开；而引擎一旦回退过共享就会一直复用那个 sink。
     /// 这条命令强制丢掉旧结论、重开一次输出。
     RetryOutput,
+    /// 切换「音乐厅氛围」开关（设置项 concertHall）。
+    /// 不重开设备：混响挂在总线上，参数由音频线程平滑过渡。
+    SetConcertHall { mode: crate::engine::hall::HallMode },
     /// 停止引擎线程（预留：应用退出时显式收尾）
     #[allow(dead_code)]
     Shutdown,
@@ -508,6 +512,10 @@ fn handle_command(ctx: &mut EngineCtx, cmd: EngineCommand, app: &tauri::AppHandl
             // 先清掉上次的回退结论，再重开输出；没有在播的曲目时状态会回到「尚未打开」。
             ctx.core.forget_fallback();
             remigrate_output(ctx, app, shared);
+        }
+        EngineCommand::SetConcertHall { mode } => {
+            // 同样不 sync：混响档位不进 PlayerState 快照，改了也不影响播放状态
+            ctx.core.set_hall(mode);
         }
         EngineCommand::SetPreviousRestart { enabled } => {
             // 全文件唯一一个不调 sync_shared 的非空分支：该偏好不进 PlayerState 快照、

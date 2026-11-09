@@ -5,11 +5,13 @@ import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import type { AudioDeviceInfo, ExclusiveDeviceCaps, OutputStatus, PlayMode } from "../api/types";
 import {
+  audioConcertHall,
   audioExclusiveProbe,
   audioOutputDevices,
   audioOutputMode,
   audioOutputStatus,
   audioRetryOutput,
+  audioSetConcertHall,
   audioSetOutputDevice,
   audioSetOutputMode,
 } from "../api/ipc";
@@ -47,7 +49,7 @@ const MODES: { key: PlayMode; label: string }[] = [
   { key: "shuffle", label: "随机播放" },
 ];
 
-export function SettingsView() {
+export function SettingsView() {
   const refreshStats = useLibraryStore((s) => s.refreshStats);
   const folders = useLibraryStore((s) => s.folders);
   const refreshFolders = useLibraryStore((s) => s.refreshFolders);
@@ -225,6 +227,33 @@ export function SettingsView() {
       }
     },
     [outMode, refreshOutStatus]
+  );
+  // 「音乐厅氛围」：挂在播放总线上的 Freeverb 混响（设置项 concertHall，默认关闭）。
+  // 切换**不重开设备** —— 参数在音频线程里平滑过渡，正在播的歌不会被掐断。
+  const [hall, setHall] = useState("off");
+  useEffect(() => {
+    void (async () => {
+      try {
+        setHall(await audioConcertHall());
+      } catch {
+        /* 读不到就保持 off（默认） */
+      }
+    })();
+  }, []);
+  const hallOn = hall === "on";
+  const changeHall = useCallback(
+    async (mode: string) => {
+      const prev = hall;
+      setHall(mode);
+      try {
+        await audioSetConcertHall(mode);
+        toast(mode === "off" ? "已关闭音乐厅氛围" : "已开启音乐厅氛围", "success");
+      } catch (e) {
+        setHall(prev);
+        toast("切换音乐厅氛围失败：" + String(e), "error");
+      }
+    },
+    [hall]
   );
   const probeCaps = useCallback(async () => {
     setProbeBusy(true);
@@ -411,6 +440,27 @@ export function SettingsView() {
               </div>
             </div>
           ))}
+        </div>
+        <div className="section-title">音乐厅氛围</div>
+        <div className="settings-block">
+          <div className="settings-row">
+            <div className="settings-row-main">
+              <div className="settings-label">混响空间</div>
+              <div className="settings-hint">
+                {hallOn
+                  ? "已开启：所有曲目共用一个「厅」，切歌不断尾巴"
+                  : "已关闭（默认）：输出原始信号"}
+              </div>
+            </div>
+            <button
+              type="button"
+              className={"switch" + (hallOn ? " on" : "")}
+              aria-pressed={hallOn}
+              onClick={() => void changeHall(hallOn ? "off" : "on")}
+            >
+              <span className="switch-knob" />
+            </button>
+          </div>
         </div>
         <div className="section-title">音乐文件夹</div>
         <div className="settings-block">
@@ -612,7 +662,6 @@ export function SettingsView() {
                   type="button"
                   disabled={!lowPower}
                   className={"chip" + (lpTheme === o.value ? " active" : "")}
-                  title={lowPower ? undefined : "先在上一行开启低功耗模式"}
                   onClick={() => void setSetting(LP_THEME_KEY, o.value)}
                 >
                   {o.label}
@@ -640,7 +689,7 @@ export function SettingsView() {
             <span className="lf-value">{Math.round(lyricSize * 100)}%</span>
             <button
               className="lf-icon-btn"
-              title="恢复默认字号"
+              aria-label="恢复默认字号"
               disabled={lyricSize === DEFAULT_SIZE}
               onClick={() => void persistFont("lyricFontSize", String(DEFAULT_SIZE))}
             >
@@ -670,11 +719,6 @@ export function SettingsView() {
                 <button
                   key={p}
                   className={"chip lf-chip" + (matchPolicy === p ? " active" : "")}
-                  title={
-                    p === "consistent"
-                      ? "纯汉字行一律按中文字体渲染：一行只有一个声音（日文歌的汉字会略偏中文字形）"
-                      : "纯汉字行跟随整首歌的语言：日文字形更准，但夹了外语句的中文歌会整首换字体"
-                  }
                   onClick={() => void persistFont(MATCH_POLICY_KEY, p)}
                 >
                   {p === "consistent" ? "一致性优先" : "准确优先"}
@@ -690,7 +734,6 @@ export function SettingsView() {
                 <button
                   key={w.value}
                   className={"chip lf-chip" + (lyricWeight === w.value ? " active" : "")}
-                  title={"font-weight: " + w.value}
                   onClick={() => void persistFont("lyricFontWeight", String(w.value))}
                 >
                   <span style={{ fontWeight: w.value }}>{w.label}</span>
@@ -698,7 +741,7 @@ export function SettingsView() {
               ))}
               <button
                 className="lf-icon-btn"
-                title="恢复默认粗细"
+                aria-label="恢复默认粗细"
                 disabled={lyricWeight === DEFAULT_WEIGHT}
                 onClick={() => void persistFont("lyricFontWeight", String(DEFAULT_WEIGHT))}
               >

@@ -10,6 +10,7 @@ use crate::engine::backend::{self, Fallback, OutputMode};
 use crate::engine::beat::{BeatMeter, BeatTap};
 use crate::engine::downmix;
 use crate::engine::exclusive::ExclusiveSink;
+use crate::engine::hall::{HallControl, HallMode, HallSource};
 use crate::engine::resample::ResamplerSource;
 use crate::error::{AppError, E_AUDIO_DEVICE, E_DECODE};
 use rodio::mixer::Mixer;
@@ -66,9 +67,13 @@ pub struct CoreAudio {
     sink: Option<MixerDeviceSink>,
     /// 独占输出的渲染线程句柄（None = 当前没走独占）
     exclusive: Option<ExclusiveSink>,
-    /// 独占路径下**自建**的 mixer：Player 接到它，渲染线程从它的 MixerSource 拉样本。
-    /// 与 ExclusiveSink 内部持有的 MixerSource 共享同一个 channel。
-    exclusive_mixer: Option<Mixer>,
+    /// 播放总线：Player 接到它，「音乐厅氛围」的混响挂在它的下游。
+    /// 共享与独占**共用同一条 bus**，换后端时听感不会跳变。
+    bus: Option<Mixer>,
+    /// 上面这条 bus 当前被哪个后端拉着 —— 决定复用还是重建（HallSource 与 mixer 一一绑定）
+    bus_owner: Option<Backend>,
+    /// 混响档位。与音频线程共享，切换时只改原子量、不重开设备。
+    hall: Arc<HallControl>,
     /// 建立上面这条独占链路时用的**曲目采样率**。
     /// 用来判断「换曲之后要不要重开设备」：采样率不同就得重开（P0 不做逐曲切率的无缝）。
     exclusive_track_rate: Option<u32>,
@@ -112,7 +117,9 @@ impl CoreAudio {
         Self {
             sink: None,
             exclusive: None,
-            exclusive_mixer: None,
+            bus: None,
+            bus_owner: None,
+            hall: Arc::new(HallControl::new(HallMode::Off)),
             exclusive_track_rate: None,
             exclusive_denied: false,
             player: None,
@@ -199,6 +206,8 @@ impl CoreAudio {
     fn open_output(&mut self, prefer_id: Option<&str>, track_rate: Option<u32>) -> Result<(), AppError> {
         // 共享输出已经开着：直接复用（对应历史行为：设备只开一次）
         if self.sink.is_some() {
+            // bus 可能是上一轮独占留下的（或根本没建），这里幂等地补齐到共享设备上
+            self.ensure_shared_bus();
             return Ok(());
         }
         if self.mode.allows_exclusive() && !self.exclusive_denied {
@@ -263,6 +272,8 @@ impl CoreAudio {
                 // 设备失效时我们会主动丢弃 sink，这行噪音日志就不必了
                 sink.log_on_drop(false);
                 self.sink = Some(sink);
+                // 设备一开出来就把它接上（混响比较早地挂到总线上，用户改档位时立刻生效）
+                self.ensure_shared_bus();
                 self.endpoint_id = id;
                 self.endpoint_name = Some(name.clone());
                 self.publish(Backend::Shared, None);
@@ -317,8 +328,9 @@ impl CoreAudio {
                 fmts.push(backend::FMT_PREF[0]);
             }
             for fmt in fmts {
-                let (mixer, source) = rodio::mixer::mixer(nz_channels(channels), nz_rate(rate));
-                match ExclusiveSink::start_at(device_id.clone(), source, rate, fmt, channels) {
+                // 每轮重建 bus：HallSource 与 mixer 是绑定的，不能把上一条的复用过来
+                let src = self.rebuild_bus(rate, channels);
+                match ExclusiveSink::start_at(device_id.clone(), src, rate, fmt, channels) {
                     Ok(sink) => {
                         let label = sink.format_label().to_string();
                         // 用 sink 自己报的 rate/channels 打日志：与真正开出来的设备状态一致
@@ -331,7 +343,7 @@ impl CoreAudio {
                         self.endpoint_id = device_id;
                         self.endpoint_name = Some(name);
                         self.exclusive = Some(sink);
-                        self.exclusive_mixer = Some(mixer);
+                        self.bus_owner = Some(Backend::Exclusive);
                         self.exclusive_track_rate = track_rate;
                         self.last_fallback = None;
                         self.publish(Backend::Exclusive, Some(label));
@@ -362,17 +374,58 @@ impl CoreAudio {
         if let Some(mut s) = self.exclusive.take() {
             s.stop();
         }
-        self.exclusive_mixer = None;
+        // bus 保留但不再被任何后端拉着；下一次打开输出会重建（见 rebuild_bus）
+        self.bus_owner = None;
         self.exclusive_track_rate = None;
     }
 
-    /// 当前输出链路对应的 mixer（共享 sink 的，或独占自建的那个）
+    /// 当前播放总线（Player 接到它，混响挂在它下游）。
     fn active_mixer(&self) -> Option<&Mixer> {
-        if let Some(m) = &self.exclusive_mixer {
-            return Some(m);
-        }
-        self.sink.as_ref().map(|s| s.mixer())
+        self.bus.as_ref()
     }
+
+    /// 建一条新总线：mixer + 保活源 + 混响，返回要交给后端的源。
+    ///
+    /// 为什么必须有保活源：rodio 的 MixerSource 在所有子源结束时直接返回 None
+    /// （迭代结束），下游会把「暂停/歌与歌之间」当成播放完毕。垫一个无限长的
+    /// Zero 源，总线就永远可拉 —— 没内容时它吐的是静音。
+    fn rebuild_bus(&mut self, rate: u32, channels: usize) -> HallSource<rodio::mixer::MixerSource> {
+        let (bus, source) = rodio::mixer::mixer(nz_channels(channels), nz_rate(rate));
+        bus.add(rodio::source::Zero::new(nz_channels(channels), nz_rate(rate)));
+        self.bus = Some(bus);
+        self.bus_owner = None;
+        HallSource::new(source, channels, rate, self.hall.clone())
+    }
+
+    /// 确保共享设备上挂着一条活的 bus（幂等）。
+    fn ensure_shared_bus(&mut self) {
+        if self.bus.is_some() && self.bus_owner == Some(Backend::Shared) {
+            return;
+        }
+        let Some((rate, channels)) = self
+            .sink
+            .as_ref()
+            .map(|s| (s.config().sample_rate().get(), s.config().channel_count().get() as usize))
+        else {
+            return;
+        };
+        let src = self.rebuild_bus(rate, channels);
+        if let Some(sink) = self.sink.as_ref() {
+            sink.mixer().add(src);
+            self.bus_owner = Some(Backend::Shared);
+        }
+    }
+
+    /// 切换「音乐厅氛围」开关（设置项 concertHall）。返回是否真的变了。
+    /// ⚠️ 刻意不重开设备：参数在音频线程里平滑过渡，重开反而会断一下。
+    pub fn set_hall(&mut self, mode: HallMode) -> bool {
+        if self.hall.mode() == mode {
+            return false;
+        }
+        self.hall.set(mode);
+        true
+    }
+
 
     /// 把当前后端/格式/回退原因写进共享状态槽
     fn publish(&self, backend: Backend, format: Option<String>) {
@@ -451,6 +504,8 @@ impl CoreAudio {
     pub fn reset_device(&mut self) {
         self.clear_player();
         self.sink = None;
+        self.bus = None;
+        self.bus_owner = None;
         self.exclusive_denied = false;
         self.last_fallback = None;
     }
