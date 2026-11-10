@@ -422,8 +422,8 @@ const LV = { error: C("red", "错误"), warn: C("yellow", "警告"), info: C("di
 function report(results) {
   const withLyrics = results.filter((r) => r.report);
   const noLyrics = results.filter((r) => !r.report);
-  const dist = { zh: 0, ja: 0, ko: 0, latin: 0, none: 0 };
-  for (const r of withLyrics) dist[r.report.songSlot ?? "none"]++;
+  const dist = { zhHans: 0, zhHant: 0, ja: 0, ko: 0, latin: 0, symbols: 0, none: 0 };
+  for (const r of withLyrics) dist[r.report.songProfile ?? "none"]++;
   const byLevel = { error: [], warn: [], info: [] };
   for (const r of withLyrics) for (const i of r.report.issues) byLevel[i.level].push({ r, i });
 
@@ -434,7 +434,8 @@ function report(results) {
     " 曲目 " + results.length + " 首 · 读到歌词 " + withLyrics.length + " 首 · 没有歌词 " + noLyrics.length + " 首"
   );
   console.log(
-    " 主语言：中文 " + dist.zh + " · 日文 " + dist.ja + " · 韩文 " + dist.ko + " · 西文 " + dist.latin + " · 无 " + dist.none
+    " 主语言：简中 " + dist.zhHans + " · 繁中 " + dist.zhHant + " · 日文 " + dist.ja + " · 韩文 " + dist.ko +
+      " · 西文 " + dist.latin + " · 符号 " + dist.symbols + " · 无 " + dist.none
   );
 
   const emit = (level, limit) => {
@@ -466,8 +467,8 @@ function report(results) {
     console.log(C("dim", "── 全部曲目 ──"));
     for (const r of withLyrics) {
       const rep = r.report;
-      const bar = ["zh", "ja", "ko", "latin"].map((s) => s + ":" + rep.slots[s]).join(" ");
-      console.log("  " + (rep.songSlot ?? "-").padEnd(5) + " " + bar.padEnd(34) + " " + r.label);
+      const bar = ["zhHans", "zhHant", "ja", "ko", "latin", "symbols"].map((s) => s + ":" + rep.profiles[s]).join(" ");
+      console.log("  " + (rep.songProfile ?? "-").padEnd(7) + " " + bar.padEnd(52) + " " + r.label);
     }
   }
 
@@ -531,7 +532,7 @@ for (const t of tracks) {
     console.log("");
     console.log(C("bold", "=== " + t.label));
     console.log(C("dim", "    " + t.file + "  来源 " + ly.source));
-    for (let i = 0; i < texts.length; i++) console.log("  " + rep.lineSlots[i].padEnd(6) + texts[i]);
+    for (let i = 0; i < texts.length; i++) console.log("  " + rep.lineProfiles[i].padEnd(7) + texts[i]);
   }
 }
 

@@ -5,7 +5,7 @@ import type {
   LyricsResult,
   Album, Artist, AudioDeviceInfo, ExclusiveDeviceCaps, FolderInfo, LibraryStats, Paginated, Playlist,
   PlaylistDetail, PlayerState, PlayMode, QueuePosition, SearchResult, Track, TrackFilter,
-  OutputStatus, ExclusiveOutputSettings,
+  OutputStatus, ExclusiveOutputSettings, FontResource, ImportReport,
 } from "./types";
 
 export async function scanAddMusicFolder(path: string): Promise<FolderInfo> {
@@ -195,4 +195,29 @@ export async function trackLyrics(trackId: number): Promise<LyricsResult> {
 /** 当前节拍强度 0..1（音频旁路检测，~30Hz 轮询） */
 export async function playerBeat(): Promise<number> {
   return invoke("player_beat");
+}
+
+// ───────────────────────────── 自定义字体库 ─────────────────────────────
+
+/** 已导入字体列表（顺带标记文件丢失的记录） */
+export async function fontList(): Promise<FontResource[]> {
+  return invoke("font_list");
+}
+/**
+ * 导入字体文件。paths 是用户通过系统文件对话框选中的绝对路径。
+ * 成功 / 重复（同一内容哈希）/ 失败 三类分开返回，界面据此给不同提示。
+ */
+export async function fontImport(paths: string[]): Promise<ImportReport> {
+  return invoke("font_import", { paths });
+}
+/** 从字体库删除（同时删文件）；引用它的档案由前端负责回退到系统字体 */
+export async function fontRemove(id: string): Promise<void> {
+  return invoke("font_remove", { id });
+}
+/**
+ * 取字体原始字节，供前端 new FontFace 注册。
+ * 后端用 tauri::ipc::Response 直接回二进制，避免 base64 的 33% 膨胀。
+ */
+export async function fontBytes(id: string): Promise<ArrayBuffer> {
+  return invoke("font_bytes", { id });
 }

@@ -7,6 +7,7 @@ mod db;
 pub mod bench;
 mod engine;
 mod error;
+mod fonts;
 mod lyrics;
 mod models;
 mod scanner;
@@ -217,6 +218,11 @@ pub fn run() {
             // 「空间音效」混响档位
             commands::audio::audio_concert_hall,
             commands::audio::audio_set_concert_hall,
+            // 自定义字体库（导入 / 列表 / 删除 / 取字节）
+            commands::fonts::font_list,
+            commands::fonts::font_import,
+            commands::fonts::font_remove,
+            commands::fonts::font_bytes,
             // 设置
             commands::settings::settings_get,
             commands::settings::settings_set,

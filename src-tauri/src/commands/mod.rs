@@ -1,5 +1,6 @@
 //! 命令层公共设施：异步化数据库访问
 pub mod audio;
+pub mod fonts;
 pub mod library;
 pub mod player;
 pub mod playlist;

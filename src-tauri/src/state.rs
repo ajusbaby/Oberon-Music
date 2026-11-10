@@ -16,6 +16,10 @@ pub struct AppState {
     pub db_path: PathBuf,
     /// 封面缓存目录（app_data/cover_cache）
     pub cover_dir: PathBuf,
+    /// 用户导入的字体目录（app_data/fonts，内含 index.json 索引）
+    pub font_dir: PathBuf,
+    /// 字体索引的读写锁：导入 / 删除 / 列表都串行化，避免并发写坏 index.json
+    pub fonts_lock: Arc<Mutex<()>>,
     /// 播放引擎句柄
     pub engine: EngineHandle,
     /// 扫描控制器
@@ -33,6 +37,7 @@ impl AppState {
             .map_err(|e| AppError::internal(format!("获取数据目录失败: {e}")))?;
         let db_path = data_dir.join("library.db3");
         let cover_dir = data_dir.join("cover_cache");
+        let font_dir = data_dir.join("fonts");
         let conn = crate::db::open_db(&db_path)?;
         let db = Arc::new(Mutex::new(conn));
 
@@ -126,6 +131,8 @@ impl AppState {
                 db,
                 db_path,
                 cover_dir,
+                font_dir,
+                fonts_lock: Arc::new(Mutex::new(())),
                 engine,
                 scan: Arc::new(ScanControl::default()),
                 watcher: WatcherHandle { tx },

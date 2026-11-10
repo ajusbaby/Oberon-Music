@@ -296,3 +296,73 @@ export interface LyricsResult {
   origin: string | null;
   lines: LyricLine[];
 }
+
+// ───────────────────────────── 自定义字体（文档《歌词自定义字体系统方案》） ─────────────────────────────
+
+/** 字体覆盖统计：每个维度是该维度参考字符集里的命中数 */
+export interface FontCoverage {
+  latin: number;
+  hanCommon: number;
+  hanExt: number;
+  kana: number;
+  hangul: number;
+  symbols: number;
+  emoji: number;
+}
+
+/** 可变字体的一条轴（wght / wdth / 自定义） */
+export interface FontAxis {
+  tag: string;
+  min: number;
+  default: number;
+  max: number;
+}
+
+/** 一个已导入的字体资源（Rust: src/fonts.rs FontResource） */
+export interface FontResource {
+  id: string;
+  contentHash: string;
+  fileName: string;
+  originalName: string;
+  byteSize: number;
+  faceIndex: number;
+  /** 字体集合（.ttc / woff2 合集）里的 face 总数 */
+  faces: number;
+  family: string;
+  subfamily: string;
+  postscript: string | null;
+  weight: number;
+  width: number;
+  italic: boolean;
+  /** OS/2 fsType 位域；0 表示可自由嵌入 */
+  embedding: number;
+  variable: boolean;
+  axes: FontAxis[];
+  /** sfnt / woff / woff2 / unknown */
+  format: string;
+  /** 覆盖较充分的文字系统：latin / han / kana / hangul / symbols / emoji */
+  scripts: string[];
+  coverage: FontCoverage;
+  /** cmap 里的码位数（不是覆盖统计的参考集命中数） */
+  codepoints: number;
+  /** 覆盖码点按升序合并成的 [起, 止] 闭区间，前端二分查找判"这个字由主字体出" */
+  coverageRanges: [number, number][];
+  addedAt: number;
+  /** 解析成功才有覆盖统计；false 表示只能交给浏览器试试 */
+  parsed: boolean;
+  warning: string | null;
+  /** 索引里有记录但文件已不在磁盘上 */
+  missing: boolean;
+}
+
+export interface ImportFailure {
+  path: string;
+  message: string;
+}
+
+/** 一次导入的结果；导入队列里可能混合成功、重复、失败 */
+export interface ImportReport {
+  imported: FontResource[];
+  duplicates: FontResource[];
+  failed: ImportFailure[];
+}

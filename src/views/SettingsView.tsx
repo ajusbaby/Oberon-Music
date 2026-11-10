@@ -23,6 +23,7 @@ import { useSettingsStore } from "../stores/settingsStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { useUiStore, toast } from "../stores/uiStore";
 import { pickAndAddMusicFolder } from "../lib/addMusic";
+import { LyricFontSettings } from "../components/LyricFontSettings";
 import {
   ACTIVE_SCALE_KEY,
   ACTIVE_SCALE_RANGE,
@@ -38,6 +39,9 @@ import {
   readWeight,
 } from "../lib/lyricFont";
 
+
+/** 字重按钮上的中文名（WEIGHT_OPTIONS 只给数值，名字属于界面） */
+const WEIGHT_LABELS: Record<number, string> = { 300: "细", 400: "常规", 500: "中粗", 700: "粗" };
 
 /** 歌词字号预设：值就是 --lyric-size 的倍数（1 = 设计稿的 24px） */
 const SIZE_PRESETS: { label: string; value: number }[] = [
@@ -301,7 +305,7 @@ export function SettingsView() {
   );
 
   // 歌词排版：字号 / 字重 / 纯汉字行的语言归属。
-  // 字体本身不再可配置 —— 固定走系统字体（原因见 src/lib/lyricFont.ts 头部注释）。
+  // 字体本身在下面的「歌词字体」区块里配置（字体库 + 六份语言档案，见 src/lib/lyricFont.ts）。
   const lyricSize = readSize(settings);
   const lyricWeight = readWeight(settings);
   // 当前句（正在播放的那句）的字号放大倍数，默认 1.5×
@@ -785,11 +789,11 @@ export function SettingsView() {
             <div className="lf-options">
               {WEIGHT_OPTIONS.map((w) => (
                 <button
-                  key={w.value}
-                  className={"chip lf-chip" + (lyricWeight === w.value ? " active" : "")}
-                  onClick={() => void persistFont("lyricFontWeight", String(w.value))}
+                  key={w}
+                  className={"chip lf-chip" + (lyricWeight === w ? " active" : "")}
+                  onClick={() => void persistFont("lyricFontWeight", String(w))}
                 >
-                  <span style={{ fontWeight: w.value }}>{w.label}</span>
+                  <span style={{ fontWeight: w }}>{WEIGHT_LABELS[w] ?? String(w)}</span>
                 </button>
               ))}
               <button
@@ -803,6 +807,8 @@ export function SettingsView() {
             </div>
           </div>
         </div>
+
+        <LyricFontSettings />
 
         <div className="section-title">数据与关于</div>
         <div className="settings-block">

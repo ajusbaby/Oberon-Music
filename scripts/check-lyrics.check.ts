@@ -1,6 +1,6 @@
 // 曲库歌词体检的**计算**部分（npm run check:lyrics 的纯函数入口）。
 //
-// 为什么要有这个文件：语言判定 + 字体槽全是纯函数，但"这两首歌为什么一行里两种字体"
+// 为什么要有这个文件：语言判定 + 字体档案全是纯函数，但"这两首歌为什么一行里两种字体"
 // 在界面上看不出来。把判定结果按**整个曲库**摊开，异常会自己跳出来。
 //
 // 分工：
@@ -8,9 +8,9 @@
 //   · scripts/check-lyrics.mjs：读库、找音频、抽标签、提取歌词文本，再把文本交进来。
 //
 // ⚠️ 下面这几个 RE_* 与 src/lib/lyricFont.ts 里的同源，但它们**只用于写问题判据**
-//    （"这一行明明是纯汉字，为什么落到了日文槽"），行归属的结论一律来自 lyricFont。
-import { detectLineSlots, detectSongSlot } from "../src/lib/lyricFont";
-import type { FontSlot, MatchPolicy } from "../src/lib/lyricFont";
+//    （"这一行明明是纯汉字，为什么落到了日文档案"），行归属的结论一律来自 lyricFont。
+import { PROFILE_IDS, detectLineProfiles, detectSongProfile } from "../src/lib/lyricFont";
+import type { FontProfileId, MatchPolicy } from "../src/lib/lyricFont";
 
 const RE_KANA = /[\u3041-\u3096\u309D-\u309F\u30A1-\u30FA\u30FD-\u30FF\u31F0-\u31FF\uFF66-\uFF9D]/;
 const RE_HANGUL = /[\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uAC00-\uD7FF]/;
@@ -36,18 +36,21 @@ export interface CharStat {
 }
 
 export interface LyricReport {
-  songSlot: FontSlot | null;
-  /** 每个槽分到多少行 */
-  slots: Record<FontSlot, number>;
-  /** 与输入 texts 一一对应的行槽 */
-  lineSlots: FontSlot[];
-  /** 唯一的主导槽（CJK 三槽里行数最多的那个） */
-  dominant: FontSlot | null;
+  /** 整首歌被判到的档案 */
+  songProfile: FontProfileId | null;
+  /** 每个档案分到多少行 */
+  profiles: Record<FontProfileId, number>;
+  /** 与输入 texts 一一对应的行档案 */
+  lineProfiles: FontProfileId[];
+  /** 汉字系档案里行数最多的那个（zhHans / zhHant / ja / ko） */
+  dominant: FontProfileId | null;
   chars: CharStat;
   issues: Issue[];
 }
 
-export const SLOT_ORDER: FontSlot[] = ["latin", "zh", "ja", "ko"];
+export const PROFILE_ORDER: FontProfileId[] = [...PROFILE_IDS];
+/** 汉字系档案：它们之间互相竞争，也是"切行换字体"的唯一来源 */
+export const CJK_PROFILES: FontProfileId[] = ["zhHans", "zhHant", "ja", "ko"];
 
 /** 拆字统计：只用于展示与判据，不参与行归属 */
 export function charStat(texts: string[]): CharStat {
@@ -96,84 +99,99 @@ export function analyzeLyrics(
   groups: number[][],
   policy: MatchPolicy = "consistent"
 ): LyricReport {
-  const songSlot = detectSongSlot(texts);
-  const lineSlots = detectLineSlots(texts, songSlot, groups, policy);
-  const slots: Record<FontSlot, number> = { latin: 0, zh: 0, ja: 0, ko: 0 };
-  for (const s of lineSlots) slots[s]++;
+  const songProfile = detectSongProfile(texts);
+  const lineProfiles = detectLineProfiles(texts, songProfile, policy, groups);
+  const profiles = {} as Record<FontProfileId, number>;
+  for (const id of PROFILE_IDS) profiles[id] = 0;
+  for (const p of lineProfiles) profiles[p]++;
   const chars = charStat(texts);
   const issues: Issue[] = [];
 
-  const cjk = slots.zh + slots.ja + slots.ko;
-  let dominant: FontSlot | null = null;
+  const cjk = CJK_PROFILES.reduce((n, id) => n + profiles[id], 0);
+  let dominant: FontProfileId | null = null;
   let best = -1;
-  for (const s of ["zh", "ja", "ko"] as FontSlot[]) {
-    if (slots[s] > best) {
-      best = slots[s];
-      dominant = s;
+  for (const id of CJK_PROFILES) {
+    if (profiles[id] > best) {
+      best = profiles[id];
+      dominant = id;
     }
   }
   if (best <= 0) dominant = null;
 
-  // ---- 1) 一致性问题的定义式检查：纯汉字行**不该**落到日文 / 韩文槽 ----
+  // ---- 1) 一致性问题的定义式检查：纯汉字行**不该**落到日文 / 韩文档案 ----
   // 这是用户报的那一类问题的判据。策略为准确优先时它会成批出现，那是预期行为，降级为 info。
   const stray: string[] = [];
   for (let i = 0; i < texts.length; i++) {
     const t = texts[i];
-    const slot = lineSlots[i];
-    if (slot !== "ja" && slot !== "ko") continue;
+    const profile = lineProfiles[i];
+    if (profile !== "ja" && profile !== "ko") continue;
     if (RE_KANA.test(t) || RE_HANGUL.test(t) || RE_JP_KANJI.test(t)) continue;
-    stray.push((stray.length < 3 ? "" : "") + t.trim());
+    stray.push(t.trim());
   }
   if (stray.length) {
     const list = stray.slice(0, 3).map((s) => "「" + s + "」").join(" ");
     issues.push({
       level: policy === "accurate" ? "info" : "error",
-      code: "han-on-foreign-slot",
+      code: "han-on-foreign-profile",
       detail:
         stray.length +
-        " 行纯汉字歌词落到了日文/韩文槽" +
+        " 行纯汉字歌词落到了日文/韩文档案" +
         (policy === "accurate"
-          ? "（准确优先下这是预期：跟随整首主语言）"
-          : "（一致性优先下不该出现，判定有 bug）") +
+          ? "（逐行判定下这是预期：跟随整首主语言）"
+          : "（整首一致策略下不该出现，判定有 bug）") +
         " 例：" +
         list,
     });
   }
 
-  // ---- 2) 跨行换字体：同一首歌的汉字槽不止一个 ----
-  // 汉字是中日韩共用码位。一旦行归属跨了 zh / ja / ko，切行时字号与笔画粗细就会跳
+  // ---- 2) 跨行换字体：同一首歌的汉字系档案不止一个 ----
+  // 汉字是中日韩共用码位。一旦行归属跨了 zhHans / zhHant / ja / ko，切行时字号与笔画粗细就会跳
   //（Windows 实测同句墨迹高：雅黑约 42-43px、Yu Gothic UI 约 41-43px 但笔画更细且缺简体字、
   //  Malgun Gothic 约 40px）。这是「一整首里有几行字明显不一样」的判据；行内混排由第 1 条负责。
-  const cjkSlots = (["zh", "ja", "ko"] as FontSlot[]).filter((s) => slots[s] > 0);
-  if (cjkSlots.length > 1) {
-    const parts = cjkSlots
-      .map((s) => s + " " + slots[s] + " 行(" + Math.round((slots[s] / Math.max(1, cjk)) * 100) + "%)")
+  // 只统计"确实在排汉字行"的档案：一首中文歌里夹的韩语段落（谚文行）本来就该用韩文字体，
+  // 那不是换字体问题，是两种文字各用各的字体。
+  const hanLineCount = {} as Record<FontProfileId, number>;
+  for (const id of PROFILE_IDS) hanLineCount[id] = 0;
+  for (let i = 0; i < texts.length; i++) {
+    const t = texts[i];
+    if (!RE_HAN.test(t) || RE_KANA.test(t) || RE_HANGUL.test(t)) continue;
+    hanLineCount[lineProfiles[i]]++;
+  }
+  const cjkProfiles = CJK_PROFILES.filter(
+    (id) => profiles[id] > 0 && (hanLineCount[id] > 0 || id === "zhHans" || id === "zhHant"),
+  );
+  if (cjkProfiles.length > 1) {
+    const parts = cjkProfiles
+      .map((id) => id + " " + profiles[id] + " 行(" + Math.round((profiles[id] / Math.max(1, cjk)) * 100) + "%)")
       .join(" · ");
-    const minor = cjkSlots.filter((s) => s !== (dominant ?? "zh"));
-    const minorShare = Math.max(...minor.map((s) => slots[s])) / Math.max(1, cjk);
+    const minor = cjkProfiles.filter((id) => id !== (dominant ?? "zhHans"));
+    const minorShare = Math.max(...minor.map((id) => profiles[id])) / Math.max(1, cjk);
     // 原词 + 翻译的双语歌词会严格交替（ja zh ja zh …）。此时两种文字本来就该用两种字体，
-    // 属于正常排版；真正要看的是「满篇同一种槽，零星几行突然换掉」。
-    const seq = lineSlots.filter((s) => s === "zh" || s === "ja" || s === "ko");
+    // 属于正常排版；真正要看的是「满篇同一种档案，零星几行突然换掉」。
+    const seq = lineProfiles.filter((p) => CJK_PROFILES.includes(p));
     let flips = 0;
     for (let i = 1; i < seq.length; i++) if (seq[i] !== seq[i - 1]) flips++;
     const flipRate = seq.length > 1 ? flips / (seq.length - 1) : 0;
-    const alternating = cjkSlots.length === 2 && flipRate > 0.6;
+    const alternating = cjkProfiles.length === 2 && flipRate > 0.6;
+    // 逐行判定下跨档案是预期结果（双语歌词、日文歌里的中文翻译），永远只算提示
+    const level: IssueLevel =
+      policy === "accurate" ? "info" : alternating ? "info" : minorShare >= 0.2 ? "warn" : "info";
     issues.push({
-      level: alternating ? "info" : minorShare >= 0.2 ? "warn" : "info",
+      level,
       code: alternating ? "bilingual-alternating" : "cross-font-switch",
       detail:
         "同一首歌跨了 " +
-        cjkSlots.length +
-        " 个汉字字体槽（" +
+        cjkProfiles.length +
+        " 个汉字档案（" +
         parts +
-        "，相邻行换槽率 " +
+        "，相邻行换档案率 " +
         Math.round(flipRate * 100) +
         "%）" +
         (alternating
           ? "：原词与翻译交替，属双语歌词正常排版"
           : "，切行时字号/笔画会跳") +
-        (songSlot && dominant && dominant !== songSlot && !alternating
-          ? "；主语言判定 " + songSlot + " 与主导槽 " + dominant + " 不一致"
+        (dominant && dominant !== songProfile && !alternating
+          ? "；主语言判定 " + songProfile + " 与主导档案 " + dominant + " 不一致"
           : ""),
     });
   }
@@ -181,14 +199,14 @@ export function analyzeLyrics(
   // ---- 4) 主语言判定偏弱：假名/谚文密度低但被判成 ja/ko ----
   {
     const cjkChars = chars.han + chars.kana + chars.hangul;
-    if (songSlot === "ja" && cjkChars > 80 && chars.kana / cjkChars < 0.2) {
+    if (songProfile === "ja" && cjkChars > 80 && chars.kana / cjkChars < 0.2) {
       issues.push({
         level: "info",
         code: "weak-ja",
         detail: "判成日文，但假名只占 " + Math.round((100 * chars.kana) / cjkChars) + "%（汉字 " + chars.han + " 个）",
       });
     }
-    if (songSlot === "ko" && cjkChars > 80 && chars.hangul / cjkChars < 0.1) {
+    if (songProfile === "ko" && cjkChars > 80 && chars.hangul / cjkChars < 0.1) {
       issues.push({
         level: "info",
         code: "weak-ko",
@@ -265,22 +283,23 @@ export function analyzeLyrics(
     }
   }
 
-  return { songSlot, slots, lineSlots, dominant, chars, issues };
+  return { songProfile, profiles, lineProfiles, dominant, chars, issues };
 }
 
 export function run(): number {
   // 自检：不读库，只验"判定 → 报告"这条链本身是通的（runner 会再用真曲库跑一遍）
-  const cases: { name: string; texts: string[]; want: FontSlot | null }[] = [
-    { name: "中文歌", texts: ["山有木兮木有枝", "心悦君兮君不知"], want: "zh" },
+  const cases: { name: string; texts: string[]; want: FontProfileId }[] = [
+    { name: "中文歌", texts: ["山有木兮木有枝", "心悦君兮君不知"], want: "zhHans" },
     { name: "日文歌", texts: ["君の名は", "夜に駆ける"], want: "ja" },
     { name: "韩文歌", texts: ["사랑해요", "그대여"], want: "ko" },
-    { name: "中文歌夹韩语", texts: ["사랑해 사랑해", "也看到天真的自己", "连我自己都很惊讶"], want: "zh" },
+    { name: "繁体歌", texts: ["我們這樣的人", "這就是答案"], want: "zhHant" },
+    { name: "中文歌夹韩语", texts: ["사랑해 사랑해", "也看到天真的自己", "连我自己都很惊讶"], want: "zhHans" },
   ];
   let fail = 0;
   for (const c of cases) {
     const r = analyzeLyrics(c.texts, []);
-    if (r.songSlot !== c.want) {
-      console.log("FAIL " + c.name + " songSlot=" + r.songSlot + " want=" + c.want);
+    if (r.songProfile !== c.want) {
+      console.log("FAIL " + c.name + " songProfile=" + r.songProfile + " want=" + c.want);
       fail++;
     }
     const hard = r.issues.filter((i) => i.level === "error");
@@ -289,14 +308,14 @@ export function run(): number {
       fail++;
     }
   }
-  // 《红蔷薇白玫瑰》回归：夹一句韩语的中文歌，纯汉字行必须全部落在 zh
+  // 《红蔷薇白玫瑰》回归：夹一句韩语的中文歌，纯汉字行必须全部落在简体中文
   const rose = analyzeLyrics(
     ["사람해 사랑해", "说不出说不出一句话", "也看到天真的自己", "月亮会一直带领"],
     [[0], [1], [2], [3]]
   );
-  const strayHan = rose.lineSlots.filter((s, i) => s !== "zh" && i > 0);
+  const strayHan = rose.lineProfiles.filter((p, i) => p !== "zhHans" && i > 0);
   if (strayHan.length) {
-    console.log("FAIL 红蔷薇白玫瑰：纯汉字行仍跑到别的槽 " + JSON.stringify(rose.lineSlots));
+    console.log("FAIL 红蔷薇白玫瑰：纯汉字行仍跑到别的档案 " + JSON.stringify(rose.lineProfiles));
     fail++;
   }
   console.log("自检：" + (fail ? "失败 " + fail : "通过"));

@@ -236,6 +236,181 @@
     stroke-width: 1.9;
 }
 
+/* 歌曲级语言覆盖（§5.4）：顶栏右侧的胶囊按钮 + 自绘弹出面板。
+   原生 <select> 的弹出层由 Windows 绘制（白底直角、灰蓝高亮），
+   与流光背景完全两套语言，所以整颗换成自绘 listbox（见 LangPicker.tsx）。 */
+.sl-lang {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 6px 0 10px;
+    border-radius: 15px;
+    background: var(--sl-fill);
+    color: rgba(var(--sl-fg-rgb) / 0.72);
+    transition: color 160ms ease, background 160ms ease;
+}
+
+.sl-lang:hover,
+.sl-lang.is-open {
+    color: var(--sl-fg);
+}
+
+.sl-lang.is-open {
+    background: rgba(var(--sl-fg-rgb) / 0.08);
+}
+
+.sl-lang-name {
+    font-size: 11.5px;
+    letter-spacing: 0.02em;
+    color: rgba(var(--sl-fg-rgb) / 0.5);
+}
+
+.sl-lang-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    height: 24px;
+    padding: 0 2px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.sl-lang-btn:focus-visible {
+    outline: 2px solid rgba(var(--sl-fg-rgb) / 0.32);
+    outline-offset: 2px;
+}
+
+.sl-chevron {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0.55;
+    transition: transform 200ms cubic-bezier(0.3, 0, 0.2, 1), opacity 160ms ease;
+}
+
+.sl-lang.is-open .sl-chevron {
+    transform: rotate(180deg);
+    opacity: 0.85;
+}
+
+/* 弹出面板：抬起一层的玻璃片，锚在胶囊右下方 */
+.sl-lang-pop {
+    position: absolute;
+    top: calc(100% + 9px);
+    right: 0;
+    z-index: 30;
+    min-width: 178px;
+    max-height: min(60vh, 340px);
+    padding: 5px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    overflow-y: auto;
+    border-radius: 14px;
+    /* 玻璃片而不是白卡：让底下的流光透一点上来，和封面取色同呼吸 */
+    background: rgba(255, 255, 255, 0.66);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    /* 顶部一道内高光 + 外投影：贴在浅色流光上也能和背景分开，又不出硬边 */
+    box-shadow:
+        0 18px 40px -12px rgba(0, 0, 0, 0.26),
+        0 2px 10px -4px rgba(0, 0, 0, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.62),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+    -webkit-backdrop-filter: blur(28px) saturate(170%);
+    backdrop-filter: blur(28px) saturate(170%);
+    transform-origin: top right;
+    animation: sl-lang-pop-in 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sl-lang-pop:focus {
+    outline: none;
+}
+
+.sl-lang-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 8px 0 10px;
+    border-radius: 9px;
+    font-size: 12.5px;
+    line-height: 1;
+    color: rgba(0, 0, 0, 0.68);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: background 120ms ease, color 120ms ease;
+}
+
+.sl-lang-opt.is-active {
+    background: rgba(0, 0, 0, 0.055);
+    color: #000;
+}
+
+.sl-lang-opt.is-selected {
+    color: #000;
+    font-weight: 600;
+}
+
+.sl-lang-opt-label {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sl-tick {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0;
+    transform: scale(0.7);
+    transition: opacity 140ms ease, transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.sl-lang-opt.is-selected .sl-tick {
+    opacity: 0.75;
+    transform: scale(1);
+}
+
+@keyframes sl-lang-pop-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sl-lang-pop {
+        animation: none;
+    }
+    .sl-chevron,
+    .sl-tick {
+        transition: none;
+    }
+}
+
 /* 清屏时唯一留下的出口 */
 .sl-clear-exit {
     position: absolute;
@@ -440,6 +615,24 @@
     color: transparent;
     /* 颜色交给渐变，别让上面那条 color 过渡把 transition 拖进来 */
     transition: font-weight 220ms ease;
+}
+
+/* 片段字体（文档 §7.1）：一行里可能同时有"中文档案"和"拉丁档案"两段，
+   每段自带 font-family；主字体没覆盖的字再单独成段（.is-fb）。
+   注意：父级 .sl-in 在当前句里是 color:transparent + background-clip:text，
+   子 span 绝不能设 color —— 一设就退化成"自己的颜色"，逐句扫过的渐变当场断掉。 */
+.sl-run {
+    /* 不设 display:inline-block：那会让每段都无法断行，长句会顶出容器 */
+    color: inherit;
+    background: none;
+}
+
+/* 回退字：点状下划线。用的是 border 不是 text-decoration —— 下划线会被 background-clip:text
+   一起裁掉（划线不是字形），border 照常绘制，所以正好能当"来源标注"。 */
+.sl-run.is-fb {
+    cursor: help;
+    border-bottom: 1px dotted rgba(var(--sl-fg-rgb, 0 0 0) / 0.45);
+    padding-bottom: 1px;
 }
 
 /* 翻译行：字号 ×0.82；上边距不再叠一份行内 padding */

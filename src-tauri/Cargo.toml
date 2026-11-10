@@ -1,6 +1,6 @@
 [package]
 name = "oberon"
-version = "0.4.13"
+version = "0.4.14"
 description = "Oberon（Tauri 2 桌面内核）"
 edition = "2021"
 
@@ -25,6 +25,11 @@ quick-xml = "0.37"
 # 封面缩略图（解码 + 缩放 + 编码 JPEG）。image 本来就在依赖树里（tauri/lofty 间接带入），
 # 这里只是把它提为直接依赖并显式打开 jpeg/png 两个编解码器。
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+# 字体资源解析：woff 用 zlib、woff2 用 brotli、去重用 sha256
+# （三者本来就在依赖树里 —— tauri / lofty / 更新器各自带进来的，这里只是提为直接依赖）
+flate2 = "1"
+brotli = "8"
+sha2 = "0.10"
 # 数据库（SQLite 编译进二进制）
 rusqlite = { version = "0.40", features = ["bundled"] }
 # 目录遍历与并行扫描

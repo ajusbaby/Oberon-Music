@@ -20,6 +20,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import * as api from "../api/ipc";
 import type { LyricsResult } from "../api/types";
 import { Icon } from "./Icon";
+import { LangPicker } from "./LangPicker";
 import { PlayerBar } from "./PlayerBar";
 import { FlowingLight } from "./FlowingLight";
 import { FALLBACK_LOOK, sampleCover } from "../lib/coverColor";
@@ -29,16 +30,43 @@ import { frameBudget } from "../lib/frameBudget";
 import { usePlayerStore } from "../stores/playerStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
-  detectLineSlots,
-  detectSongSlot,
-  lyricFontStacks,
+  buildStacks,
+  detectLineProfiles,
+  detectSongProfile,
+  fontFamilyName,
+  OVERRIDE_AUTO,
+  OVERRIDES_KEY,
+  PROFILES,
+  PROFILE_LIST,
+  profileLang,
   readActiveScale,
   readMatchPolicy,
+  readOverrides,
+  readProfiles,
+  readShowSource,
   readSize,
   readWeight,
-  slotLang,
+  resolveSongProfile,
+  serializeOverrides,
+  setOverride,
+  splitLineRuns,
 } from "../lib/lyricFont";
+import type { FontProfileId, LineRun } from "../lib/lyricFont";
+import { ensureFontsRegistered, useFontStore } from "../stores/fontStore";
 import { useUiStore, toast } from "../stores/uiStore";
+
+/** 诊断用：一段文字的 Unicode 码位列表（"U+4F60 U+597D"），超过 12 个就省略 */
+function codepointsOf(text: string): string {
+  const list: string[] = [];
+  for (const ch of text) {
+    const cp = ch.codePointAt(0);
+    if (cp === undefined) continue;
+    if (/s/.test(ch)) continue;
+    list.push("U+" + cp.toString(16).toUpperCase().padStart(4, "0"));
+    if (list.length >= 12) break;
+  }
+  return list.join(" ");
+}
 
 /** 鼠标静止多久后进入沉浸模式（3s） */
 const IMMERSIVE_DELAY = 3200;
@@ -88,9 +116,17 @@ export function LyricsPage() {
   const progressSecs = usePlayerStore((s) => s.positionSecs);
   const seek = usePlayerStore((s) => s.seek);
   const settingsValues = useSettingsStore((s) => s.values);
+  const writeSetting = useSettingsStore((s) => s.set);
+  // 字体库：资源列表一次性加载，注册成 FontFace 后浏览器才认这条链
+  const fontResources = useFontStore((s) => s.resources);
+  const fontStatus = useFontStore((s) => s.status);
+  const loadFonts = useFontStore((s) => s.load);
+  useEffect(() => {
+    if (fontStatus === "idle") void loadFonts();
+  }, [fontStatus, loadFonts]);
 
-  // 歌词字体：固定系统字体，按语言分栈（西文 / 中文 / 日文 / 韩文），每行按脚本引用。
-  // 行上 var(--lf-<slot>) → 该语言的系统字体链（规则见 src/lib/lyricFont.ts）。
+  // 歌词字体：字号 / 字重 / 当前句缩放来自设置；「用哪个字体」来自字体库 + 六份语言档案。
+  // 具体规则全在 src/lib/lyricFont.ts，这里只负责把结果搬到 style 上。
   const lyricFontSize = readSize(settingsValues);
   const lyricFontWeight = readWeight(settingsValues);
   // 当前句放大倍率（1 = 不放大，默认 1.5）
@@ -117,6 +153,8 @@ export function LyricsPage() {
   const [lyrics, setLyrics] = useState<LyricsResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [immersive, setImmersive] = useState(false);
+  /** 顶栏语言下拉是否展开：展开期间压住沉浸计时器，否则选到一半菜单先淡出了 */
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
   // 进出场动画：只动 opacity / transform（合成层属性），保证 60fps
   const [phase, setPhase] = useState<"in" | "out" | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -203,6 +241,7 @@ export function LyricsPage() {
     const reset = () => {
       setImmersive(false);
       if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
+      if (langMenuOpen) return; // 下拉展开中：顶栏连同菜单一起留住
       hideTimer.current = window.setTimeout(() => setImmersive(true), IMMERSIVE_DELAY);
     };
     reset();
@@ -215,7 +254,8 @@ export function LyricsPage() {
       window.removeEventListener("keydown", reset);
       if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
     };
-  }, [open]);
+    // langMenuOpen 进依赖：菜单一展开就立刻取消已经排好的隐藏任务
+  }, [open, langMenuOpen]);
 
   // Esc 返回
   useEffect(() => {
@@ -611,22 +651,79 @@ export function LyricsPage() {
   const hasLyrics = lines.length > 0;
   const synced = !!lyrics?.synced && hasLyrics;
 
-  // 整首歌的主语言：决定"没设置的槽"跟随谁（一首歌一个声音）
-  const songSlot = useMemo(() => detectSongSlot(lines.map((l) => l.text)), [lines]);
-  // 每个语言槽的完整字体栈（系统正体链）；放进 memo 是为了每帧的进度更新不重算
-  const fontStacks = useMemo(() => lyricFontStacks(songSlot), [songSlot]);
-  // 纯汉字行怎么归属：一致性优先（默认，一律按中文）或准确优先（跟随歌典主语言）
+  // 整首歌归属哪个档案：假名 / 谚文是硬证据，简体字与日式汉字是软证据（权重见 lyricFont）
+  const detectedProfile = useMemo(() => detectSongProfile(lines.map((l) => l.text)), [lines]);
+  // 歌曲级语言覆盖（§5.4）：统计判错时用户只改这一首，settings 里按曲目 id 存一条
+  const overrides = useMemo(() => readOverrides(settingsValues), [settingsValues]);
+  const trackKey = current?.trackId ?? null;
+  const overrideProfile = resolveSongProfile(null, overrides, trackKey);
+  // 覆盖优先，其次统计判定（空歌词时 detectSongProfile 给 symbols）
+  const songProfile: FontProfileId = overrideProfile ?? detectedProfile ?? "latin";
+  // 六份档案的配置（主字体 / 备用字体 / 缺字策略），存在 settings 的 lyricFontProfiles 里
+  const profiles = useMemo(() => readProfiles(settingsValues), [settingsValues]);
+  // 每份档案一条链：主字体 → 备用字体 → 该语言系统链 → sans-serif
+  const stacks = useMemo(() => buildStacks(profiles, fontResources), [profiles, fontResources]);
+  // 纯汉字行怎么归属：整首一致（默认）或逐行按证据
   const matchPolicy = readMatchPolicy(settingsValues);
-  // 每一行归属的语言槽：汉字行按"简体 / 和制汉字 + 同组有没有假名"判
-  const lineSlots = useMemo(
-    () => detectLineSlots(lines.map((l) => l.text), songSlot, groups, matchPolicy),
-    [lines, songSlot, groups, matchPolicy]
+  // 每一行归属的档案（同组翻译行跟随原词，见 detectLineProfiles）
+  const lineProfiles = useMemo(
+    () => detectLineProfiles(lines.map((l) => l.text), songProfile, matchPolicy, groups),
+    [lines, songProfile, matchPolicy, groups]
   );
 
-  // 每一行最终用的字体栈（memo 保持字符串引用稳定，避免每次 render 触发子节点重绘）
+  // 链里出现的导入字体必须真的注册过（document.fonts.add）才会生效。
+  // 注册是异步的：注册完 +1 个 epoch 让下面几个 memo 重算一次，避免"首帧是系统字体"。
+  const [fontEpoch, setFontEpoch] = useState(0);
+  const userFontIds = useMemo(() => Array.from(new Set(Object.values(stacks).flatMap((s) => s.userFontIds))), [stacks]);
+  const userFontKey = userFontIds.join("|");
+  useEffect(() => {
+    if (!userFontIds.length) return;
+    let alive = true;
+    void ensureFontsRegistered(userFontIds).then(() => {
+      if (alive) setFontEpoch((n) => n + 1);
+    });
+    return () => {
+      alive = false;
+    };
+    // 依赖用 join 出来的键：userFontIds 每次 memo 都是新数组，直接当依赖会无限重注册
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userFontKey]);
+
+  // 每一行最终用的字体链（memo 保持字符串引用稳定，避免每次 render 触发子节点重排）
   const lineStacks = useMemo(
-    () => lines.map((_, i) => fontStacks.bySlot[lineSlots[i] ?? "latin"]),
-    [lines, lineSlots, fontStacks]
+    () => lines.map((_, i) => stacks[lineProfiles[i] ?? "latin"].css),
+    [lines, lineProfiles, stacks, fontEpoch]
+  );
+
+  // §11「显示实际字体来源」：把每行拆成"主字体出的字"和"回退来的字"，各挂各的链
+  const showSource = readShowSource(settingsValues);
+  const resourceById = useMemo(() => new Map(fontResources.map((r) => [r.id, r])), [fontResources]);
+  const primaryOf = useCallback(
+    (id: FontProfileId) => {
+      const pid = profiles[id].primaryFontId;
+      return pid ? resourceById.get(pid) ?? null : null;
+    },
+    [profiles, resourceById]
+  );
+  const lineRuns = useMemo(() => {
+    if (!showSource) return null;
+    return lines.map((line, i) => {
+      const profile = lineProfiles[i] ?? "latin";
+      // 这一行所属档案没导入字体 → 整行本来就是系统链，标不出更细的来源，不拆
+      if (!primaryOf(profile)) return null;
+      return splitLineRuns(line.text, profile, primaryOf, true);
+    });
+  }, [showSource, lines, lineProfiles, primaryOf]);
+
+  /** 一段文字该挂哪条链：主字体覆盖的段只挂主字体，缺字段挂整条回退链 */
+  const runCss = useCallback(
+    (run: LineRun) => {
+      const chain = stacks[run.profile];
+      if (run.fallback) return chain.css;
+      const first = chain.userFontIds[0];
+      return first ? '"' + fontFamilyName(first) + '", sans-serif' : chain.css;
+    },
+    [stacks]
   );
 
   /**
@@ -659,12 +756,14 @@ export function LyricsPage() {
       ref={pageRef}
       style={
         {
-          // 歌词字体：每个语言槽一条完整字体栈（行上按语言引用）；--lyric-font 保留为主语言栈
-          "--lyric-font": fontStacks.primary,
-          "--lf-latin": fontStacks.bySlot.latin,
-          "--lf-zh": fontStacks.bySlot.zh,
-          "--lf-ja": fontStacks.bySlot.ja,
-          "--lf-ko": fontStacks.bySlot.ko,
+          // 六份档案的链暴露成 CSS 变量：行上直接引用，诊断色的图例也能取用
+          "--lf-zhHans": stacks.zhHans.css,
+          "--lf-zhHant": stacks.zhHant.css,
+          "--lf-ja": stacks.ja.css,
+          "--lf-ko": stacks.ko.css,
+          "--lf-latin": stacks.latin.css,
+          "--lf-symbols": stacks.symbols.css,
+          "--lf-main": stacks[songProfile].css,
           "--lyric-size": String(lyricFontSize),
           "--lyric-weight": String(lyricFontWeight),
           "--sl-active-scale": String(lyricActiveScale),
@@ -697,6 +796,30 @@ export function LyricsPage() {
             <span>{current?.artist ?? "从音乐库选择一首歌"}</span>
           </div>
           <div className="sl-actions">
+            {/* 歌曲级语言覆盖（§5.4）：只影响这一首，不动六份档案的配置 */}
+            {hasLyrics && (
+              <LangPicker
+                label="语言"
+                title="这首歌按哪种语言排版。默认按歌词统计判定，判错时可以只改这一首。"
+                ariaLabel={"这首歌的歌词语言：" + (overrideProfile ? PROFILES[overrideProfile].label : "自动")}
+                value={overrideProfile ?? OVERRIDE_AUTO}
+                options={[
+                  { id: OVERRIDE_AUTO, label: "自动（" + PROFILES[songProfile].label + "）" },
+                  ...PROFILE_LIST.map((p) => ({ id: p.id as string, label: p.label })),
+                ]}
+                onOpenChange={setLangMenuOpen}
+                onChange={(value) => {
+                  const id = (value || null) as FontProfileId | null;
+                  void writeSetting(OVERRIDES_KEY, serializeOverrides(setOverride(overrides, trackKey, id)));
+                  toast(
+                    id
+                      ? "这首歌的歌词改用「" + PROFILES[id].label + "」的字体"
+                      : "这首歌的歌词语言改回自动判定",
+                    "info",
+                  );
+                }}
+              />
+            )}
             <button
               className="sl-icon-btn"
               aria-label={cleared ? "退出沉浸" : "沉浸清屏"}
@@ -758,14 +881,15 @@ export function LyricsPage() {
                     >
                       {group.map((index, k) => {
                         const line = lines[index];
-                        // 这一行的语言：字体栈按它取，lang 属性同时修中日的汉字字形变体
-                        const slot = lineSlots[index] ?? "latin";
+                        // 这一行的档案：字体链按它取，lang 属性同时修中日的汉字字形变体
+                        const profile = lineProfiles[index] ?? "latin";
+                        const runs = lineRuns?.[index] ?? null;
                         return (
                           <p
                             key={index}
                             // k>0 = 同组里的第二行以后，也就是翻译行（字号 ×0.8）
                             className={"sl-line" + (k > 0 ? " is-tr" : "") + (synced ? " is-clickable" : "")}
-                            lang={slotLang(slot)}
+                            lang={profileLang(profile)}
                             style={{ fontFamily: lineStacks[index] }}
                             onClick={
                               synced
@@ -778,8 +902,41 @@ export function LyricsPage() {
                             }
                           >
                             {/* 文字包一层 inline 容器：逐句扫过的渐变按"文字宽度"铺，
-                                而不是按整列宽 —— 居中布局下整列 820px 会让 1/4 的行宽打在空白上 */}
-                            <span className="sl-in">{line.text}</span>
+                                而不是按整列宽 —— 居中布局下整列 820px 会让 1/4 的行宽打在空白上。
+                                开了「显示实际字体来源」时，这一段会按"主字体 / 回退"再切成几段：
+                                主字体段只挂主字体，缺字段挂整条链 —— 于是眼睛看到的字面来源就是真的。 */}
+                            <span className="sl-in">
+                              {runs
+                                ? runs.map((run, ri) => (
+                                    <span
+                                      key={ri}
+                                      className={"sl-run" + (run.fallback ? " is-fb" : "")}
+                                      style={{ fontFamily: runCss(run) }}
+                                      title={
+                                        run.fallback
+                                          ? "这几个字主字体没有，实际由该语言的系统字体渲染（点开看码位）"
+                                          : "这一段的字来自主字体"
+                                      }
+                                      onClick={
+                                        run.fallback
+                                          ? (e) => {
+                                              // 诊断模式（§7.3）：点回退段给出缺字列表 + 码位，同时别让点击顺带跳转播放
+                                              e.stopPropagation();
+                                              toast(
+                                                "主字体缺这几个字，已回退到系统字体：" +
+                                                  codepointsOf(run.text) +
+                                                  (run.profile === songProfile ? "" : "（" + PROFILES[run.profile].label + "档案）"),
+                                                "info",
+                                              );
+                                            }
+                                          : undefined
+                                      }
+                                    >
+                                      {run.text}
+                                    </span>
+                                  ))
+                                : line.text}
+                            </span>
                           </p>
                         );
                       })}

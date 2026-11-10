@@ -2479,9 +2479,11 @@ dependencies = [
 
 [[package]]
 name = "oberon"
-version = "0.4.13"
+version = "0.4.14"
 dependencies = [
+ "brotli",
  "dsd-reader",
+ "flate2",
  "id3",
  "image",
  "lofty",
@@ -2493,6 +2495,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "symphonia",
  "tauri",
  "tauri-build",
