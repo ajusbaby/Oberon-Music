@@ -24,11 +24,15 @@ import { usePlayerStore } from "../stores/playerStore";
 import { useUiStore, toast } from "../stores/uiStore";
 import { pickAndAddMusicFolder } from "../lib/addMusic";
 import {
+  ACTIVE_SCALE_KEY,
+  ACTIVE_SCALE_RANGE,
+  DEFAULT_ACTIVE_SCALE,
   DEFAULT_SIZE,
   DEFAULT_WEIGHT,
   MATCH_POLICY_KEY,
   SIZE_RANGE,
   WEIGHT_OPTIONS,
+  readActiveScale,
   readMatchPolicy,
   readSize,
   readWeight,
@@ -300,6 +304,8 @@ export function SettingsView() {
   // 字体本身不再可配置 —— 固定走系统字体（原因见 src/lib/lyricFont.ts 头部注释）。
   const lyricSize = readSize(settings);
   const lyricWeight = readWeight(settings);
+  // 当前句（正在播放的那句）的字号放大倍数，默认 1.5×
+  const activeScale = readActiveScale(settings);
   // 纯汉字行怎么归属：一致性优先（默认，一律按中文）/ 准确优先（跟随歌曲主语言）
   const matchPolicy = readMatchPolicy(settings);
 
@@ -717,6 +723,28 @@ export function SettingsView() {
               aria-label="恢复默认字号"
               disabled={lyricSize === DEFAULT_SIZE}
               onClick={() => void persistFont("lyricFontSize", String(DEFAULT_SIZE))}
+            >
+              <Icon name="refresh" />
+            </button>
+          </div>
+          <div className="lf-row">
+            <div className="lf-label">当前句</div>
+            <input
+              type="range"
+              className="lf-range"
+              min={Math.round(ACTIVE_SCALE_RANGE[0] * 100)}
+              max={Math.round(ACTIVE_SCALE_RANGE[1] * 100)}
+              step={5}
+              value={Math.round(activeScale * 100)}
+              onChange={(e) => void persistFont(ACTIVE_SCALE_KEY, String(Number(e.target.value) / 100))}
+              aria-label="当前句歌词放大倍数"
+            />
+            <span className="lf-value">×{activeScale.toFixed(2)}</span>
+            <button
+              className="lf-icon-btn"
+              aria-label="恢复默认放大倍数"
+              disabled={activeScale === DEFAULT_ACTIVE_SCALE}
+              onClick={() => void persistFont(ACTIVE_SCALE_KEY, String(DEFAULT_ACTIVE_SCALE))}
             >
               <Icon name="refresh" />
             </button>

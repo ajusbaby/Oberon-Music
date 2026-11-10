@@ -375,7 +375,7 @@
     transition: opacity 400ms cubic-bezier(0.24, 1, 0.34, 1);
 }
 
-/* 行内 padding = 7dp + 字号 × 0.11；当前句字号不变，只改颜色与字重 */
+/* 行内 padding = 7dp + 字号 × 0.11；当前句在下面按 --sl-active-scale 单独放大字号 */
 .sl-line {
     margin: 0;
     padding: calc(7px + var(--sl-fs) * 0.11) 0;
@@ -386,7 +386,11 @@
     color: var(--sl-fg);
     white-space: normal;
     overflow-wrap: anywhere;
-    transition: color 220ms ease;
+    /* font-size / padding 也一起过渡：当前句放大时是"长出来"的，而不是啪一下跳大号 */
+    transition:
+        color 220ms ease,
+        font-size 280ms cubic-bezier(0.22, 1, 0.36, 1),
+        padding 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* 字重全篇统一：原文行和译文行取同一个 --lyric-weight（默认粗体 700）。
@@ -402,6 +406,21 @@
    只靠颜色比原文浅一档来拉开层级。 */
 .sl-g.is-active .sl-line.is-tr {
     color: rgba(var(--sl-fg-rgb) / 0.74);
+}
+
+/* 当前句放大：倍率来自设置 --sl-active-scale（默认 1.5，范围 1–2）。
+   只放大**字号**，绝不用 transform: scale —— 那会先按原尺寸栅格化再合成放大，文字当场发虚
+   （首页封面流的中心卡踩过同一个坑）。行内 padding 同比放大，不然大字会把留白吃掉。 */
+.sl-g.is-active .sl-line {
+    font-size: calc(var(--sl-fs) * var(--sl-active-scale, 1.5));
+    padding-top: calc(7px + var(--sl-fs) * var(--sl-active-scale, 1.5) * 0.11);
+    padding-bottom: calc(7px + var(--sl-fs) * var(--sl-active-scale, 1.5) * 0.11);
+}
+
+/* 译文行仍比原文小一档：两个倍率相乘，别让译文跟着原文一起放大到同号 */
+.sl-g.is-active .sl-line.is-tr {
+    font-size: calc(var(--sl-fs) * 0.82 * var(--sl-active-scale, 1.5));
+    padding-top: 0;
 }
 
 /* 逐句扫过（规范 I.3）：当前句原文行按 --sl-k 从左往右"点亮"。

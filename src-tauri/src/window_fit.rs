@@ -7,7 +7,7 @@
 //! 这里的做法是：窗口以 visible:false 建出来 → show → 量工作区 → 先降下限再改
 //! 尺寸 → 居中。下限也必须跟着工作区走，否则「最小尺寸」本身就超出屏幕。
 
-use tauri::WebviewWindow;
+use tauri::{Monitor, PhysicalPosition, WebviewWindow};
 
 /// 设计稿尺寸（逻辑像素）
 pub const DESIGN_W: f64 = 1064.0;
@@ -66,8 +66,49 @@ pub fn fit_window(win: &WebviewWindow) -> tauri::Result<bool> {
     // 顺序不能反：先把下限降下来再改尺寸，否则 set_size 会被旧下限弹回去。
     win.set_min_size(Some(tauri::LogicalSize::new(f.min_width, f.min_height)))?;
     win.set_size(tauri::LogicalSize::new(f.width, f.height))?;
-    win.center()?;
+    center_on(win, &mon);
     Ok(true)
+}
+
+/// 按「刚量到的那块工作区」居中（物理像素）。
+///
+/// 不用 win.center()：它内部会再查一次 current_monitor，查不到就直接 Err ——
+/// 而启动那一瞬间正是最容易查不到的时刻。查失败的结果就是窗口留在创建时的
+/// (0,0)，用户看到的就是「播放器跑到左上角」。这里改成用已经量到的 mon 自己算，
+/// 只在算不出外部尺寸时才退回 center()。
+fn center_on(win: &WebviewWindow, mon: &Monitor) {
+    let wa = mon.work_area();
+    let Ok(outer) = win.outer_size() else {
+        let _ = win.center();
+        return;
+    };
+    let x = wa.position.x as i64 + (wa.size.width as i64 - outer.width as i64) / 2;
+    let y = wa.position.y as i64 + (wa.size.height as i64 - outer.height as i64) / 2;
+    if win
+        .set_position(PhysicalPosition::new(x as i32, y as i32))
+        .is_err()
+    {
+        let _ = win.center();
+    }
+}
+
+/// 兜底：窗口还贴在 (0,0)（创建时的默认落点）就强制居中一次。只在启动阶段调用，
+/// 此时用户还没机会自己挪窗口，所以「(0,0) = 没摆好」是安全的判断。
+pub fn rescue_offscreen(win: &WebviewWindow) {
+    let Ok(pos) = win.outer_position() else {
+        return;
+    };
+    if pos.x > 0 || pos.y > 0 {
+        return;
+    }
+    let mon = win
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| win.primary_monitor().ok().flatten());
+    if let Some(mon) = mon {
+        center_on(win, &mon);
+    }
 }
 
 #[cfg(test)]

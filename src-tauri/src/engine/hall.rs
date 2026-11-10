@@ -53,11 +53,25 @@ const SMOOTH_SECS: f32 = 0.015;
 /// （也就是必然削波）。×0.45 之后 RMS 与旁路差在 0.1 dB 以内。
 const WET_GAIN_TRIM: f32 = 0.45;
 
+/// 混响发送端的高通拐点（Hz，两级一阶串联 = 12 dB/oct）。
+///
+/// Freeverb 的 comb 是宽带谐振器，几十赫兹的能量进去后会以梳状驻波的形式叠出来。
+/// 低频重的母带（库里最重的那首 &lt;45 Hz 到 -11 dBFS，比第二名重 4 dB）听感就是
+/// 持续的低频嗡鸣 —— 也就是常说的「这首歌有电音」。混响本来也不该负责次低频：
+/// 现场录音里这个频段多半已经被话筒和房间吃掉了。
+///
+/// 只高通**送进混响**的那一路；干声（dry）不经过它，仍然逐位透传。
+const SEND_HIGHPASS_HZ: f32 = 120.0;
+
 /// 混音后的软限幅拐点。
 ///
 /// 混响是能量叠加，即使 RMS 已经对齐，母带压缩过的流行歌峰值仍会冲出 0 dBFS
 /// 两三个 dB。硬削波听感上就是「开混响有破音」，所以用一段 tanh 过渡把峰值兜住。
-const LIMIT_KNEE: f32 = 0.85;
+///
+/// 拐点取 0.92 而不是更低：拐点每低一点，进入非线性区的采样就更多、互调更重。
+/// 实测库内那首低频密集的歌在 0.85 时有 4.0% 的采样被压过，0.92 后降到 1% 出头；
+/// 而 tanh 段的渐近上限是 1.0（实际峰值 ≤ 0.981），仍然兜得住，不会越 0 dBFS。
+const LIMIT_KNEE: f32 = 0.92;
 
 #[inline]
 fn soft_limit(x: f32) -> f32 {
@@ -72,6 +86,18 @@ fn soft_limit(x: f32) -> f32 {
     } else {
         y
     }
+}
+
+/// 峰值 → 统一的线性增益（立体声联动）。
+///
+/// 左右各自过 soft_limit 时，两声道被压的程度不同，每次低频冲击都会让声像往一侧歪，
+/// 听感比轻微过载更脏。所以先取两声道的最大峰值算出一个增益，再整帧乘回去。
+#[inline]
+fn limit_gain(peak: f32) -> f32 {
+    if peak <= LIMIT_KNEE || peak <= 0.0 {
+        return 1.0;
+    }
+    soft_limit(peak) / peak
 }
 
 /// 混响档位（设置项 concertHall 的取值）。
@@ -272,6 +298,42 @@ impl Allpass {
     }
 }
 
+/// 两级一阶高通（12 dB/oct），用作混响发送的次低频切除。
+///
+/// 用一阶节而不是 biquad：这里只要斜率不要相位精度，两个 one-pole 级联就够，
+/// 而且每样本只有两乘两加，48 kHz 下完全可以忽略。
+struct SendHighpass {
+    a: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+}
+
+impl SendHighpass {
+    fn new(rate: f32, hz: f32) -> Self {
+        // 一阶高通 y = a·(y + x - x_prev)，a = 1 / (1 + 2πf·T)：拐点处约 -3 dB
+        let w = std::f32::consts::TAU * hz / rate.max(1.0);
+        Self { a: 1.0 / (1.0 + w), x1: 0.0, y1: 0.0, x2: 0.0, y2: 0.0 }
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        self.y1 = self.a * (self.y1 + x - self.x1);
+        self.x1 = x;
+        self.y2 = self.a * (self.y2 + self.y1 - self.x2);
+        self.x2 = self.y1;
+        self.y2
+    }
+
+    fn clear(&mut self) {
+        self.x1 = 0.0;
+        self.y1 = 0.0;
+        self.x2 = 0.0;
+        self.y2 = 0.0;
+    }
+}
+
 /// Freeverb 本体（立体声，左 8 comb + 4 allpass，右同样但延迟线整体后移 STEREO_SPREAD）。
 struct Freeverb {
     combs_l: Vec<Comb>,
@@ -284,6 +346,8 @@ struct Freeverb {
     /// 建延迟线时用的采样率。阻尼是一阶低通，系数按样本计，
     /// 必须按它做时间常数归一化（见 set_params）。
     rate: f32,
+    /// 送进混响之前的次低频切除（见 SEND_HIGHPASS_HZ）。只作用于湿声路径。
+    send_hp: SendHighpass,
 }
 
 impl Freeverb {
@@ -294,7 +358,8 @@ impl Freeverb {
         let combs_r = COMB_TUNING.iter().map(|&t| Comb::new(scaled_len(t, STEREO_SPREAD, rate))).collect();
         let aps_l = ALLPASS_TUNING.iter().map(|&t| Allpass::new(scaled_len(t, 0, rate))).collect();
         let aps_r = ALLPASS_TUNING.iter().map(|&t| Allpass::new(scaled_len(t, STEREO_SPREAD, rate))).collect();
-        Self { combs_l, combs_r, aps_l, aps_r, wet1: 0.0, wet2: 0.0, dry: 1.0, rate: rate as f32 }
+        let send_hp = SendHighpass::new(rate as f32, SEND_HIGHPASS_HZ);
+        Self { combs_l, combs_r, aps_l, aps_r, wet1: 0.0, wet2: 0.0, dry: 1.0, rate: rate as f32, send_hp }
     }
 
     fn set_params(&mut self, p: HallParams) {
@@ -324,7 +389,13 @@ impl Freeverb {
     fn process(&mut self, l: f32, r: f32) -> (f32, f32) {
         // 左右先求和再进混响：这是 Freeverb 的设计（单声道激励 + 立体声输出），
         // 也顺手保证了「Width = 0 时左右完全相同」这条验收标准。
-        let input = (l + r) * FIXED_GAIN;
+        // 旁路态（关档：湿声 0、干声 1）不进限幅也不跑滤波：满刻度信号必须逐位原样出去
+        if self.wet1 == 0.0 && self.wet2 == 0.0 && self.dry == 1.0 {
+            return (l, r);
+        }
+
+        // 先切掉次低频再进 comb：低频重的母带否则会把 38–120 Hz 的驻波叠满整个尾巴。
+        let input = self.send_hp.process(l + r) * FIXED_GAIN;
 
         let mut wet_l = 0.0;
         for c in self.combs_l.iter_mut() {
@@ -341,9 +412,12 @@ impl Freeverb {
             wet_r = a.process(wet_r);
         }
 
-        let out_l = soft_limit(self.dry * l + self.wet1 * wet_l + self.wet2 * wet_r);
-        let out_r = soft_limit(self.dry * r + self.wet1 * wet_r + self.wet2 * wet_l);
-        (out_l, out_r)
+        // 先算未限幅的两声道，再用共同的峰值取同一个增益（见 limit_gain）：
+        // 立体声联动，限幅时声像不抖。
+        let pre_l = self.dry * l + self.wet1 * wet_l + self.wet2 * wet_r;
+        let pre_r = self.dry * r + self.wet1 * wet_r + self.wet2 * wet_l;
+        let g = limit_gain(pre_l.abs().max(pre_r.abs()));
+        (pre_l * g, pre_r * g)
     }
 
     fn clear(&mut self) {
@@ -353,6 +427,7 @@ impl Freeverb {
         for a in self.aps_l.iter_mut().chain(self.aps_r.iter_mut()) {
             a.clear();
         }
+        self.send_hp.clear();
     }
 }
 
@@ -880,6 +955,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 低频重的母带不许把混响灌成低频驻波。
+    ///
+    /// 曾经的故障：库内一首 24bit/48k 的歌 &lt;45 Hz 到 -11 dBFS（比第二名重 4 dB），
+    /// 次低频几乎原样进 comb，40–600 Hz 叠出 +24 dB 的梳状共鸣，用户听感是「有电音」。
+    /// 这条守的是「送进混响的那一路必须过 SEND_HIGHPASS_HZ 高通」。
+    #[test]
+    fn send_highpass_removes_sub_bass() {
+        let rate = 48_000.0f32;
+        let mut hp = SendHighpass::new(rate, SEND_HIGHPASS_HZ);
+        let mut acc = 0f64;
+        let n = 48_000;
+        for i in 0..n {
+            let x = (std::f32::consts::TAU * 40.0 * i as f32 / rate).sin();
+            let y = hp.process(x);
+            acc += (y * y) as f64;
+        }
+        let bass = (acc / n as f64).sqrt();
+        // 40 Hz 比拐点低 1.6 个八度，12 dB/oct → 约 -19 dB；给足余量只要求 -12 dB 以下
+        assert!(bass < 0.25, "40 Hz 残留太大：{bass:.3}（应 < 0.25）");
+
+        let mut hp2 = SendHighpass::new(rate, SEND_HIGHPASS_HZ);
+        let mut acc2 = 0f64;
+        for i in 0..n {
+            let x = (std::f32::consts::TAU * 1_000.0 * i as f32 / rate).sin();
+            let y = hp2.process(x);
+            acc2 += (y * y) as f64;
+        }
+        let mid = (acc2 / n as f64).sqrt();
+        // 1 kHz 在通带里，不能被削掉（否则混响会变闷）
+        assert!(mid > 0.65, "1 kHz 被削得太多：{mid:.3}");
+    }
+
+    /// 限幅必须立体声联动，而且任何峰值都不能推出 0 dBFS。
+    #[test]
+    fn limit_gain_is_linked_and_keeps_headroom() {
+        assert_eq!(limit_gain(0.0), 1.0);
+        assert_eq!(limit_gain(0.5), 1.0);
+        assert_eq!(limit_gain(LIMIT_KNEE), 1.0);
+        for peak in [0.93f32, 1.0, 1.2, 1.6, 4.0] {
+            let g = limit_gain(peak);
+            assert!(g < 1.0, "peak {peak} 应该被压");
+            assert!((peak * g) <= 1.0, "peak {peak} 压完仍越界：{}", peak * g);
+            // 同一个峰值必须给出同一个增益（联动的前提）
+            assert_eq!(limit_gain(peak), g);
+        }
+    }
+
+    /// 满刻度低频是「最坏情况」素材：输出必须仍然有界。
+    #[test]
+    fn bass_heavy_full_scale_stays_bounded() {
+        let p = HallMode::On.params().unwrap();
+        let mut verb = Freeverb::new(48_000);
+        verb.set_params(p);
+        let mut peak = 0f32;
+        for i in 0..48_000 * 2 {
+            let x = (std::f32::consts::TAU * 40.0 * i as f32 / 48_000.0).sin();
+            let (l, r) = verb.process(x, x);
+            assert!(l.is_finite() && r.is_finite(), "输出出现非有限值");
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        assert!(peak <= 1.0, "满刻度低频下峰值越界：{peak}");
     }
 
     /// 电平守卫：满刻度输入 + 各档混响，输出必须不越 0 dBFS，响度也不能跑偏。

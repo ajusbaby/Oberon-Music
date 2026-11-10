@@ -7,7 +7,8 @@
 //       深色 → 纯黑底 + 纯白前景；浅色 → 纯白底 + **封面主色**做前景（取不到回退 #050F19）。
 //   · 背景三层：底色（黑/白）→ 流光（FlowingLight）→ 内容。
 //     流光自己带压暗蒙层，所以播放页**没有**额外的 scrim，也没有卡片、分割线、渐变按钮。
-//   · 歌词：基准 24 × 倍率，当前句**不放大**，靠"阶梯模糊 + 0.05 alpha 差 + 加粗"区分；
+//   · 歌词：基准 24 × 倍率；当前句按设置放大（默认 1.5×，只放大字号 —— transform
+//     会先栅格再放大、文字发虚），再靠"阶梯模糊 + alpha 差"区分远近；
 //     相邻 1/2/3/≥4 行分别是 1.7 / 3.3 / 4.9 / 6.2 的模糊。
 //   · 滚动用弹簧（ζ=1.1，k=200）而不是匀速跟随：过阻尼意味着永远不过冲、不回弹。
 //   · 页面留白 30dp，封面圆角 12dp / 描边 2dp，底部固定 120（= 项目里的 --player-height）。
@@ -31,6 +32,7 @@ import {
   detectLineSlots,
   detectSongSlot,
   lyricFontStacks,
+  readActiveScale,
   readMatchPolicy,
   readSize,
   readWeight,
@@ -91,6 +93,8 @@ export function LyricsPage() {
   // 行上 var(--lf-<slot>) → 该语言的系统字体链（规则见 src/lib/lyricFont.ts）。
   const lyricFontSize = readSize(settingsValues);
   const lyricFontWeight = readWeight(settingsValues);
+  // 当前句放大倍率（1 = 不放大，默认 1.5）
+  const lyricActiveScale = readActiveScale(settingsValues);
 
   const current = player?.current ?? null;
   const status = player?.status ?? "stopped";
@@ -494,6 +498,19 @@ export function LyricsPage() {
       lastFrameRef.current = 0;
       yReadyRef.current = true;
     }
+    // 当前句字号是 280ms 过渡放大的，上面量到的是**放大前**的高度 → 目标位会稳定偏下半个高差。
+    // 过渡结束后再对一次中心（改的是 baseY，弹簧自己滑过去，不会瞬移）。
+    const settle = window.setTimeout(() => {
+      const bx = lyricsBoxRef.current;
+      const tr = trackRef.current;
+      if (!bx || !tr) return;
+      const cur = activeGroupRef.current;
+      const idx = cur >= 0 ? cur : tr.children.length > 0 ? 0 : -1;
+      const el = idx >= 0 ? (tr.children[idx] as HTMLElement | undefined) : undefined;
+      if (!el) return;
+      baseYRef.current = -(el.offsetTop + el.offsetHeight / 2 - bx.clientHeight / 2);
+    }, 320);
+    return () => window.clearTimeout(settle);
   }, [activeGroup, lyrics, open]);
 
   // 尺寸变化（拖窗口 / 进出最大化 / 字号切换）后歌词区高度变了，基准要重量一次。
@@ -538,6 +555,22 @@ export function LyricsPage() {
       if (wheelTimer.current !== null) window.clearTimeout(wheelTimer.current);
     };
   }, [open, lyrics]);
+
+  /**
+   * 「滚轮浏览 → 暂时取消模糊」的唯一出口必须是可靠的。
+   *
+   * 这个状态以前只有两个出口：2.6s 的定时器，以及重开歌词页。切歌时歌词数据变化会让上面的
+   * 滚轮 effect 重新挂载 —— 清理函数把那个定时器 clear 掉，而 blurOff 还留在 true，
+   * 于是「滚一下、在回位前切歌」会让**之后的每一首**都没有阶梯模糊。
+   * 这里把切歌 / 重开都补成强制复位：定时器一起清，状态一起清。
+   */
+  useEffect(() => {
+    if (wheelTimer.current !== null) {
+      window.clearTimeout(wheelTimer.current);
+      wheelTimer.current = null;
+    }
+    setBlurOff(false);
+  }, [current?.trackId, open]);
 
   /**
    * 阶梯模糊：0 / 1.7 / 3.3 / 4.9 / 6.2。滚轮手动浏览时整体关掉。
@@ -634,6 +667,7 @@ export function LyricsPage() {
           "--lf-ko": fontStacks.bySlot.ko,
           "--lyric-size": String(lyricFontSize),
           "--lyric-weight": String(lyricFontWeight),
+          "--sl-active-scale": String(lyricActiveScale),
           // 页面基色 = 封面平均色按 --sl-wash 洗白后的结果；白纱强度同样来自封面亮度。
           "--sl-page-rgb": look.pageRgb,
           "--sl-wash": String(look.wash),
@@ -737,6 +771,7 @@ export function LyricsPage() {
                               synced
                                 ? () => {
                                     wheelYRef.current = 0;
+                                    setBlurOff(false); // 点句跳转 = 结束手动浏览，模糊立刻回来
                                     void seek(line.timeMs / 1000);
                                   }
                                 : undefined

@@ -35,21 +35,27 @@ pub fn run() {
             // 窗口是 transparent 的，这一帧还没画出内容，用户看不到跳变。
             if let Some(win) = app.get_webview_window("main") {
                 let _ = win.show();
-                if !window_fit::fit_window(&win).unwrap_or(false) {
-                    // setup 阶段偶尔还拿不到 Monitor（窗口刚 show，Windows 还没把它
-                    // 挂到显示器上）。退一步：等它第一次真正获得焦点再量一次。
-                    let w = win.clone();
-                    let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    win.on_window_event(move |e| {
-                        if !matches!(e, tauri::WindowEvent::Focused(true)) {
+                // setup 阶段偶尔还拿不到 Monitor（窗口刚 show，Windows 还没把它
+                // 挂到显示器上）。用一个短重试线程补位：一旦量到就收工，
+                // 10 × 120ms 还量不到就走兜底居中。
+                // 不能用「等 Focused 事件再来一次」—— 窗口本来就已经有焦点时
+                // 这个事件永远不会来，尺寸和位置就一直停在创建时的默认值，
+                // 用户看到的就是「播放器跑到左上角」。
+                let w = win.clone();
+                std::thread::spawn(move || {
+                    for i in 0..10 {
+                        if window_fit::fit_window(&w).unwrap_or(false) {
                             return;
                         }
-                        if done.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                            return;
+                        // 约 480ms 还量不到显示器：先把「贴在 (0,0)」这个状态救回来，
+                        // 再继续重试尺寸。rescue 是幂等的，救过一次就不再动窗口。
+                        if i >= 3 {
+                            window_fit::rescue_offscreen(&w);
                         }
-                        let _ = window_fit::fit_window(&w);
-                    });
-                }
+                        std::thread::sleep(std::time::Duration::from_millis(120));
+                    }
+                    window_fit::rescue_offscreen(&w);
+                });
             }
 
             let handle = app.handle().clone();

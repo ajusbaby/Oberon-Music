@@ -45,6 +45,12 @@ export const DEFAULT_SIZE = 1;
 export const DEFAULT_WEIGHT = 700;
 export const SIZE_RANGE: [number, number] = [0.7, 1.8];
 
+/** 当前句相对其他句的放大倍率：1 = 不放大；默认 1.5（"正在唱的那句"要一眼看得出）。
+ *  刻意用**字号**放大，而不是 transform: scale —— 后者先按原尺寸栅格化再放大，文字立刻发虚。 */
+export const DEFAULT_ACTIVE_SCALE = 1.5;
+export const ACTIVE_SCALE_RANGE: [number, number] = [1, 2];
+export const ACTIVE_SCALE_KEY = "lyricActiveScale";
+
 export const WEIGHT_OPTIONS: { value: number; label: string }[] = [
   { value: 300, label: "细" },
   { value: 400, label: "常规" },
@@ -151,6 +157,12 @@ export function readSize(values: Record<string, string | undefined>): number {
   const n = Number(values["lyricFontSize"]);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_SIZE;
   return Math.min(SIZE_RANGE[1], Math.max(SIZE_RANGE[0], n));
+}
+
+export function readActiveScale(values: Record<string, string | undefined>): number {
+  const n = Number(values[ACTIVE_SCALE_KEY]);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_ACTIVE_SCALE;
+  return Math.min(ACTIVE_SCALE_RANGE[1], Math.max(ACTIVE_SCALE_RANGE[0], n));
 }
 
 export function readWeight(values: Record<string, string | undefined>): number {
