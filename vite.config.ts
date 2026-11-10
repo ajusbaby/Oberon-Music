@@ -20,7 +20,9 @@ export default defineConfig(async () => ({
     hmr: process.env.TAURI_DEV_HOST ? { protocol: "ws", host: process.env.TAURI_DEV_HOST, port: 1421 } : undefined,
     // .build 是本地临时目录（截图、无头浏览器配置等）。不忽略的话，里面被占用的文件
     // （例如 Edge profile 的 Cookies）会让 watcher 抛 EBUSY 并**直接终止 dev**。
-    watch: { ignored: ["**/src-tauri/**", "**/.build/**"] },
+    // 编辑器原子写会先落地一个 *.<pid>.<rand>.tmpdir 目录再改名，watcher 撞上里面的
+    // 临时文件同样会 EBUSY（同样的静默退出），所以这些目录也要一并忽略。
+    watch: { ignored: ["**/src-tauri/**", "**/.build/**", "**/*.tmpdir/**", "**/*.tmpdir"] },
   },
   build: { target: ["es2021", "chrome105", "safari13"], minify: "esbuild", sourcemap: false },
   envPrefix: ["VITE_", "TAURI_"],
