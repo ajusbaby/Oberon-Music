@@ -27,10 +27,10 @@ D:\LocalMusicPlayer
 │  │  ├─ ipc.ts              #     全部命令封装（invoke）
 │  │  └─ events.ts           #     事件订阅封装
 │  ├─ stores/                #   Zustand：player / library / playlist / nav / ui / search / selection / settings
-│  ├─ components/            #   Sidebar TopBar PlayerBar Coverflow TrackList AlbumGrid DialogLayer Icon Cover Toasts
-│  ├─ views/                 #   Home Library Album Artist Playlist Search Settings
-│  ├─ lib/                   #   格式化 / 封面缓存 / 收藏 / 选目录加歌
-│  ├─ styles/                #   design.css（设计稿 CSS 原样抽取）+ views.css（视图补充样式）
+│  ├─ components/            #   Sidebar TopBar PlayerBar Coverflow LyricsPage TrackList AlbumGrid MarqueeText StatsChart SplashScreen DialogLayer Icon Cover Toasts
+│  ├─ views/                 #   Home Library Albums Album Artist Playlist Favorites Search Stats Settings
+│  ├─ lib/                   #   格式化 / 封面缓存与取色 / 收藏 / 收听记录 / 帧预算 / 歌词字体 / 选目录加歌
+│  ├─ styles/                #   design.css（设计稿原样抽取）+ views / lyrics / stats / splash.css
 │  └─ App.tsx                #   应用外壳（布局、初始化、快捷键、扫描横幅、弹层）
 ├─ src-tauri/                # Rust 后端
 │  ├─ src/
@@ -47,7 +47,7 @@ D:\LocalMusicPlayer
 │  │  └─ state.rs            #   全局状态
 │  ├─ examples/audio_probe.rs#   音频输出探针（诊断：设备能否真实推进播放）
 │  ├─ examples/audio_endpoints.rs # 端点拓扑诊断（端点 id / DEVICE_STATE / cpal 视角，支持 --watch）
-│  ├─ tauri.conf.json        #   窗口 1267×902 无边框透明、NSIS 打包等
+│  ├─ tauri.conf.json        #   窗口 1064×794 无边框透明、NSIS 打包等
 │  └─ capabilities/          #   最小权限（core/dialog）
 ├─ docs/接口文档.md          # ★ IPC 接口文档（命令/事件/类型/错误码 + 前端接入与验证）
 ├─ Oberon技术文档.md # 技术设计文档（需求来源）
@@ -56,8 +56,10 @@ D:\LocalMusicPlayer
 │  ├─ gen-icons.mjs          #   图标生成器：由 logo/ 下的逐尺寸 ico 合成全套应用图标
 │  ├─ ui-shot.mjs            #   界面截图/驱动（WebView2 CDP）
 │  ├─ ui-smoke.mjs           #   界面端到端冒烟断言
-│  └─ ui-verify.mjs          #   设计稿一致性比对（计算样式 + 类名骨架）
-│  └─ release.ps1            #   带更新签名的打包：出安装包 + .nsis.zip + .sig + latest.json
+│  ├─ ui-verify.mjs          #   设计稿一致性比对（计算样式 + 类名骨架）
+│  ├─ release.ps1            #   带更新签名的打包：安装包 + .sig + latest.json
+│  ├─ publish.ps1            #   上传到 GitHub Release
+│  └─ release-notes.md       #   本次更新的发布说明
 └─ 磨砂玻璃风音乐播放器界面.png
 ```
 

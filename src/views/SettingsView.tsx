@@ -33,7 +33,6 @@ import {
   readSize,
   readWeight,
 } from "../lib/lyricFont";
-import { LP_THEME_KEY, LP_THEME_OPTIONS, readLpTheme, useSystemDark } from "../lib/lowPower";
 
 
 /** 歌词字号预设：值就是 --lyric-size 的倍数（1 = 设计稿的 24px） */
@@ -62,10 +61,6 @@ export function SettingsView() {
   const settings = useSettingsStore((s) => s.values);
   // 首页氛围背景开关（默认开启；关闭后组件完全卸载，0 开销）
   const ambientOn = settings["homeAmbient"] !== "off";
-  const lowPower = settings["lowPower"] === "on";
-  // 低功耗主题：只在低功耗模式下可调（用户要求"低功耗独占"），见 src/lib/lowPower.ts
-  const lpTheme = readLpTheme(settings);
-  const systemDark = useSystemDark();
   const setSetting = useSettingsStore((s) => s.set);
   const playerVolume = usePlayerStore((s) => s.state?.volume ?? 70);
   const setVolume = usePlayerStore((s) => s.setVolume);
@@ -698,57 +693,6 @@ export function SettingsView() {
             >
               <span className="switch-knob" />
             </button>
-          </div>
-
-          <div className="settings-row">
-            <div className="settings-row-main">
-              <div className="settings-label">低功耗模式</div>
-              <div className="settings-hint">
-                {lowPower
-                  ? "已开启：关闭首页光雾，歌词页改用静态背景、去掉毛玻璃与逐行模糊，动画降到 30fps"
-                  : "已关闭（默认）：完整视觉效果"}
-              </div>
-            </div>
-            <button
-              type="button"
-              className={"switch" + (lowPower ? " on" : "")}
-              aria-pressed={lowPower}
-              onClick={() => void setSetting("lowPower", lowPower ? "off" : "on")}
-            >
-              <span className="switch-knob" />
-            </button>
-          </div>
-
-          {/* 低功耗主题：**只有低功耗模式开着才能调**（关闭时按钮置灰并给出原因） */}
-          <div className="settings-row">
-            <div className="settings-row-main">
-              <div className="settings-label">
-                低功耗主题
-                {!lowPower && <span className="settings-badge">需先开启低功耗</span>}
-              </div>
-              <div className="settings-hint">
-                {!lowPower
-                  ? "只在低功耗模式下可用：开启后可切换白天 / 夜间"
-                  : lpTheme === "system"
-                    ? "跟随系统（当前系统是" + (systemDark ? "深色" : "浅色") + "）"
-                    : lpTheme === "dark"
-                      ? "夜间：整个应用深色"
-                      : "白天：整个应用浅色"}
-              </div>
-            </div>
-            <div className="chip-row">
-              {LP_THEME_OPTIONS.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  disabled={!lowPower}
-                  className={"chip" + (lpTheme === o.value ? " active" : "")}
-                  onClick={() => void setSetting(LP_THEME_KEY, o.value)}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
           </div>
 
         </div>

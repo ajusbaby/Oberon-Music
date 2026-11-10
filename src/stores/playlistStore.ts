@@ -43,7 +43,7 @@ export const usePlaylistStore = create<PlaylistState>((set, get) => ({
     try {
       await api.playlistDelete(id);
       await get().refresh();
-      toast("已删除播放列表", "success");
+      // 成功提示交给调用方（Sidebar 会带上播放列表名字），这里不再重复弹一条
     } catch (e) {
       toast("删除失败：" + String(e), "error");
     }

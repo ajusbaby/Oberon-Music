@@ -42,8 +42,8 @@
             --transition-slow: 400ms ease-out-cubic;
             --sidebar-width: 245px;
             --player-height: 120px;
-            --app-width: 1267px;
-            --app-height: 902px;
+            --app-width: 1064px;
+            --app-height: 794px;
             --app-radius: 18px;
             --player-radius-top: 15px;
             --player-radius-bottom: 18px;
@@ -374,11 +374,11 @@
         }
         .search-bar:hover {
             background: #ECECF0;
-            border-color: rgba(0, 0, 0, 0.04);
+            border-color: rgba(17, 17, 19, 0.68);
         }
         .search-bar:focus-within {
             background: #fff;
-            border-color: rgba(0, 0, 0, 0.1);
+            border-color: rgba(17, 17, 19, 0.82);
             box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         }
         .search-bar svg {
@@ -533,16 +533,10 @@
             cursor: pointer;
             /* ⚠️ 这里原来还列了 box-shadow —— 阴影无法走合成层，写进去只会白占一个提升层的
                名额（每张卡一个）。切卡动画真正需要提升的只有 transform 与 opacity。
-               也不再常驻 will-change：卡片自带 backdrop-filter，常驻提升等于每张卡常年
-               各占一层合成层（静止时白占显存与合成带宽）。改成只在切卡窗口内由
-               .cf-perspective.cf-animating 临时打开，动画结束后浏览器自行释放。 */
+               will-change 的实际取值在 styles/views.css 的 .cf-card 里常驻为
+               transform, opacity：**不能再回到「切卡窗口内临时打开」**的写法，
+               撤掉 will-change 会销毁合成层并重栅格化整张卡（切完约 900ms 海报闪一下）。 */
             will-change: auto;
-        }
-
-        /* 切卡窗口：Coverflow 在 centerIndex 变化后挂 900ms 的 .cf-animating。
-           transform 过渡 460ms、opacity 320ms，900ms 留足余量。 */
-        .cf-perspective.cf-animating .cf-card {
-            will-change: transform, opacity;
         }
 
         /* 中心卡片高亮 */

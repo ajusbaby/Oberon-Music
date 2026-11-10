@@ -20,13 +20,12 @@ import { PlaylistView } from "./views/PlaylistView";
 import { AlbumsView } from "./views/AlbumsView";
 import { SettingsView } from "./views/SettingsView";
 import { StatsView } from "./views/StatsView";
-import { useNavStore } from "./stores/navStore";
+import { useNavStore, type NavTarget } from "./stores/navStore";
 import { useUiStore, toast } from "./stores/uiStore";
 import { useLibraryStore, initLibraryEvents } from "./stores/libraryStore";
 import { usePlayerStore, initPlayerEvents } from "./stores/playerStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { playerEvents } from "./api/events";
-import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "./lib/lowPower";
 import { setWinFocused, setWinHidden as publishWinHidden } from "./lib/winFocus";
 import { playerPause, playerRestore } from "./api/ipc";
 
@@ -91,8 +90,7 @@ function Toasts() {
   );
 }
 
-function CurrentView() {
-  const view = useNavStore((s) => s.view);
+function viewBody(view: NavTarget) {
   switch (view.name) {
     case "home":
       return <HomeView />;
@@ -115,6 +113,19 @@ function CurrentView() {
     default:
       return <HomeView />;
   }
+}
+
+/**
+ * 视图切换的进场动画：靠 key 变化让 React 换掉整棵子树，CSS 动画随之重放。
+ * 只动 opacity / transform（合成器属性），不动高度、不查布局、不用计时器。
+ */
+function CurrentView() {
+  const view = useNavStore((s) => s.view);
+  return (
+    <div className="view-swap" key={view.name + ":" + (view.id ?? "") + ":" + (view.key ?? "")}>
+      {viewBody(view)}
+    </div>
+  );
 }
 
 export default function App() {
@@ -197,23 +208,26 @@ export default function App() {
     });
   }, []);
 
-  // 窗口最大化状态 → 外壳取消圆角；顺带在拖拽期间给 <html> 挂 .resizing
-  // （让 CSS 暂时收起重合成，见 design.css「拖拽窗口边框期间的合成降级」）。
-  // 旧写法每个 resize 事件都打两次 IPC 查最大化状态 —— 拖拽时每帧都在和渲染抢
-  // 主线程，是背景闪烁的放大器。现在改成尺寸稳定后再查一次。
+  // 窗口最大化状态 → 外壳取消圆角；仅在连续拖拽期间临时降级合成
+  // 最大化、全屏、最小化这类一次性尺寸变化不会再触发整窗闪烁。
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let settle = 0;
     let resizeIdle = 0;
+    let lastResizeAt = 0;
     void (async () => {
       try {
         setMaximized((await appWindow.isMaximized()) || (await appWindow.isFullscreen()));
         unlisten = await appWindow.onResized(() => {
           const root = document.documentElement;
-          root.classList.add("resizing");
-          window.clearTimeout(resizeIdle);
-          resizeIdle = window.setTimeout(() => root.classList.remove("resizing"), 180);
-
+          const now = performance.now();
+          const sustained = now - lastResizeAt < 90;
+          lastResizeAt = now;
+          if (sustained) {
+            root.classList.add("resizing");
+            window.clearTimeout(resizeIdle);
+            resizeIdle = window.setTimeout(() => root.classList.remove("resizing"), 180);
+          }
           window.clearTimeout(settle);
           settle = window.setTimeout(() => {
             void Promise.all([appWindow.isMaximized(), appWindow.isFullscreen()]).then(([m, f]) => setMaximized(m || f));
@@ -292,13 +306,6 @@ export default function App() {
   const playing = usePlayerStore((s) => s.state?.status === "playing");
   const ambientOn = useSettingsStore((s) => s.values["homeAmbient"] !== "off");
   const libStats = useLibraryStore((s) => s.stats);
-  // 低功耗模式：关掉首页光雾 + 歌词页大面积模糊/混合 + 常驻提升层（见 views.css 的 .low-power 段）
-  const lowPower = useSettingsStore((s) => s.values["lowPower"] === "on");
-  // 低功耗主题（跟随系统 / 白天 / 夜间）：**低功耗独占** —— 只有 lowPower 开着才可能挂 .theme-dark，
-  // 于是默认那套浅色主题完全不受影响（见 views.css 的「低功耗 × 夜间主题」段）
-  const lpTheme = useSettingsStore((s) => s.values[LP_THEME_KEY]);
-  const systemDark = useSystemDark();
-  const darkShell = lowPower && lpIsDark(parseLpTheme(lpTheme), systemDark);
   const ambientSeed = usePlayerStore((s) => s.state?.current?.album || s.state?.current?.title || "oberon");
   const ambientTrackId = usePlayerStore((s) => s.state?.current?.trackId ?? null);
 
@@ -308,8 +315,6 @@ export default function App() {
         "app-shell" +
         (maximized ? " maximized" : "") +
         (playing ? " playing" : "") +
-        (lowPower ? " low-power" : "") +
-        (darkShell ? " theme-dark" : "") +
         (focused ? "" : " win-blur") +
         (winHidden ? " win-hidden" : "")
       }
@@ -318,7 +323,7 @@ export default function App() {
       {/* 空库不渲染光雾：没有音乐时它只是一层与内容无关的彩色雾（旧实现按 "oberon" 哈希出紫色）。
             有音乐但还没播放时，光雾会用低饱和兜底色板（见 HomeAmbient.seedPalette）。 */}
       <HomeAmbient
-        active={view.name === "home" && ambientOn && !lowPower && (libStats?.trackCount ?? 0) > 0}
+        active={view.name === "home" && ambientOn && (libStats?.trackCount ?? 0) > 0}
         /* 歌词页打开即**冻结**（而不是卸载）：最后一帧画面留着，所以不会出现
            "光雾先消失、进场动画才出来"的观感；同时不再产帧 —— 它上方侧栏/播放条的
            毛玻璃也就不必逐帧重算，省下的正是进场峰值里那 3 个点。 */
@@ -354,7 +359,7 @@ export default function App() {
       <Toasts />
       {/* 开屏挂在外壳内部：这样自动被外壳的圆角 + overflow:hidden 裁成窗口形状 */}
       {splashOpen && (
-        <SplashScreen lowPower={lowPower} onDone={() => setSplashOpen(false)} />
+        <SplashScreen onDone={() => setSplashOpen(false)} />
       )}
     </div>
   );

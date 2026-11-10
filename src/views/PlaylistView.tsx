@@ -1,4 +1,4 @@
-// 播放列表详情：播放 / 随机 / 重命名 / 删除 / 增删曲目 / 排序
+// 播放列表详情：播放 / 重命名 / 删除 / 增删曲目 / 排序
 import { useCallback, useEffect, useState } from "react";
 import * as api from "../api/ipc";
 import type { PlaylistDetail, Track } from "../api/types";
@@ -16,7 +16,6 @@ export function PlaylistView() {
   const back = useNavStore((s) => s.back);
   const canGoBack = useNavStore((s) => s.stack.length > 0);
   const playTrack = usePlayerStore((s) => s.playTrack);
-  const setPlayMode = usePlayerStore((s) => s.setPlayMode);
   const openDialog = useUiStore((s) => s.openDialog);
   const refreshPlaylists = usePlaylistStore((s) => s.refresh);
   const listVersion = usePlaylistStore((s) => s.version);
@@ -25,10 +24,24 @@ export function PlaylistView() {
 
   const reload = useCallback(async () => {
     if (playlistId == null) return;
+    // 已经被删掉：删除会刷新列表并让本 effect 再跑一次，这里直接静默收摊，不去请求后端。
+    const known = usePlaylistStore.getState().playlists;
+    if (known.length > 0 && !known.some((p) => p.id === playlistId)) {
+      setDetail(null);
+      setLoading(false);
+      return;
+    }
     try {
       const data = await api.playlistGet(playlistId);
       setDetail(data);
     } catch (e) {
+      // 列表里已经没有它了 = 刚被删掉。删除会刷新列表（version 自增）从而再读一次本页，
+      // 这时后端当然报「找不到」，弹出来就是删除成功后紧跟一条失败提示的误报。
+      if (!usePlaylistStore.getState().playlists.some((p) => p.id === playlistId)) {
+        setDetail(null);
+        setLoading(false);
+        return;
+      }
       toast("读取播放列表失败：" + String(e), "error");
     } finally {
       setLoading(false);
@@ -106,19 +119,6 @@ export function PlaylistView() {
             </button>
             <button
               className="pill-btn"
-              disabled={tracks.length === 0}
-              onClick={() => {
-                void (async () => {
-                  await setPlayMode("shuffle");
-                  if (tracks[0]) await playTrack(tracks[0].id, ids);
-                })();
-              }}
-            >
-              <Icon name="shuffle" />
-              随机播放
-            </button>
-            <button
-              className="pill-btn"
               onClick={() => openDialog({ kind: "add-tracks", playlistId: playlistId ?? 0 })}
             >
               <Icon name="plus" />
@@ -149,9 +149,11 @@ export function PlaylistView() {
                       if (playlistId == null) return;
                       try {
                         await api.playlistDelete(playlistId);
+                        // 先离开本页再刷新列表：否则列表版本变化会让本页重新读取一个
+                        // 已经不存在的 id，删除成功的提示后面紧跟一条「读取失败」误报。
+                        nav.library("tracks");
                         await refreshPlaylists();
                         toast("已删除播放列表", "success");
-                        nav.library("tracks");
                       } catch (e) {
                         toast("删除失败：" + String(e), "error");
                       }

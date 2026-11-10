@@ -27,6 +27,13 @@ function countPlayIfNew(id: number | null, status: PlayerStatus) {
 
 interface PlayerStoreState {
   state: PlayerState | null;
+  /**
+   * 播放进度（秒）。单独放在 store 顶层，而不是写进 state.current.positionSecs：
+   * 进度事件约 800ms 一次，写进 state 会让所有订阅 state 的组件（首页、曲库列表、
+   * 侧栏）每 800ms 重渲染一次 —— 侧栏右缘的毛玻璃跟着重绘，看起来就是一直闪。
+   * 需要进度的只有播放条和歌词页，它们单独订阅这个数字。
+   */
+  positionSecs: number;
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -73,13 +80,14 @@ export async function startDefaultPlayback(): Promise<boolean> {
 
 export const usePlayerStore = create<PlayerStoreState>((set) => ({
   state: null,
+  positionSecs: 0,
   loading: false,
   error: null,
   async refresh() {
     set({ loading: true });
     try {
       const state = await api.playerState();
-      set({ state, loading: false, error: null });
+      set({ state, positionSecs: state?.current?.positionSecs ?? 0, loading: false, error: null });
     } catch (e) {
       set({ loading: false, error: String(e) });
     }
@@ -124,10 +132,7 @@ export const usePlayerStore = create<PlayerStoreState>((set) => ({
   },
   async seek(secs) {
     // 立即把进度反映到界面，避免跳转后进度条/时间短暂停留在旧值
-    const s = usePlayerStore.getState().state;
-    if (s?.current) {
-      usePlayerStore.setState({ state: { ...s, current: { ...s.current, positionSecs: secs } } });
-    }
+    usePlayerStore.setState({ positionSecs: secs });
     await guard(() => api.playerSeek(secs), "跳转");
   },
   async setVolume(v) {
@@ -162,7 +167,10 @@ export async function initPlayerEvents() {
     const { queueLen, ...rest } = payload;
     const s = usePlayerStore.getState().state;
     // 事件不含完整队列：队列长度一致时保留本地队列，其余字段实时覆盖
-    usePlayerStore.setState({ state: s ? { ...s, ...rest, queue: s.queue } : null });
+    usePlayerStore.setState({
+      state: s ? { ...s, ...rest, queue: s.queue } : null,
+      positionSecs: rest.current?.positionSecs ?? 0,
+    });
     // 播放计数（见文件顶部 countPlayIfNew 的说明）
     countPlayIfNew(rest.current?.trackId ?? null, rest.status);
     // 队列发生变化（例如由外部命令或自动切换引起）时重新拉取完整状态
@@ -173,9 +181,8 @@ export async function initPlayerEvents() {
   await onProgress((payload) => {
     const s = usePlayerStore.getState().state;
     if (s?.current && s.current.trackId === payload.trackId) {
-      usePlayerStore.setState({
-        state: { ...s, current: { ...s.current, positionSecs: payload.positionSecs } },
-      });
+      // 只写这一个数字：订阅 state 的组件（首页 / 曲库 / 侧栏）不会因此重渲染
+      usePlayerStore.setState({ positionSecs: payload.positionSecs });
       // 只有真的在播才累计收听秒数：进度事件约每 800ms 一次，差值即播过去的时长
       if (s.status === "playing") noteProgress(payload.trackId, payload.positionSecs);
     }

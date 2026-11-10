@@ -23,6 +23,20 @@ const CW = W * CENTER_SCALE;
 const X1 = Math.round(CW / 2 + (W * S1) / 6);
 const X2 = Math.round(X1 + (W * S1) / 2 + (W * S2) / 6);
 
+/** 与 design.css 里 .cf-perspective 的 perspective 保持一致 */
+const PERSPECTIVE = 1400;
+/** 中心卡的景深放大率：translateZ(Z0) 带来的透视缩放 */
+const ZOOM_Z0 = PERSPECTIVE / (PERSPECTIVE - Z0);
+/**
+ * 中心卡的**视觉**实际倍率 = 设计稿 scale × 透视放大。
+ * 中心卡是唯一会被放大到 >1 的卡（两侧都是缩小，缩小永远清晰），
+ * 而「scale + translateZ」这条 3D 路径是「先按 1× 栅格化、再由合成器把位图放大」，
+ * 于是歌名/艺术家被整体放大 1.16 倍后发虚。
+ * 改成与之一模一样的 2D 缩放（--z 归零、--s 直接取视觉倍率）后，
+ * 位图按放大后的尺寸栅格化，视觉大小完全不变、笔画锐利。
+ */
+const CENTER_VIEW_SCALE = +(CENTER_SCALE * ZOOM_Z0).toFixed(5); // 1.16136
+
 /** 循环偏移：把任意索引映射到 [-2, 2]（第一张与最后一张无缝衔接） */
 function cyclicOffset(index: number, center: number, n: number): number {
   let offset = index - center;
@@ -49,6 +63,7 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
   const total = albums.length;
   const [centerIndex, setCenterIndex] = useState(0);
   const sectionRef = useRef<HTMLDivElement | null>(null);
+
   const dragRef = useRef<{ dragging: boolean; startX: number; suppressUntil: number }>({
     dragging: false,
     startX: 0,
@@ -56,28 +71,11 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
   });
   const wheelLockRef = useRef(false);
 
-  // 切卡期间才需要合成层提升：给 .cf-perspective 挂 900ms 的 .cf-animating，
-  // 让 will-change 只在这段窗口内生效。常驻 will-change 会让每张卡（各带一层
-  // backdrop-filter）常年占一个合成层，静止时纯属白占显存与合成带宽。
-  const [animating, setAnimating] = useState(false);
-  const animTimerRef = useRef<number | null>(null);
-
-  // 中心索引一变（用户切卡 / 跟随播放 / 列表重排）就开一个 900ms 的动画窗口
-  useEffect(() => {
-    setAnimating(true);
-    if (animTimerRef.current !== null) window.clearTimeout(animTimerRef.current);
-    animTimerRef.current = window.setTimeout(() => {
-      animTimerRef.current = null;
-      setAnimating(false);
-    }, 900);
-  }, [centerIndex]);
-
-  useEffect(
-    () => () => {
-      if (animTimerRef.current !== null) window.clearTimeout(animTimerRef.current);
-    },
-    []
-  );
+  // ⚠️ 曾经有一个「切卡时挂 900ms 的 .cf-animating，用 will-change 临时提升合成层」的窗口。
+  // 那个窗口在**结束的那一刻**会销毁合成层、把整张卡连同封面重新栅格化一遍：
+  // 实测切换后 ~900ms 卡片区域有 1 万多个像素一次性变化（海报肉眼可见地"跳"一下）。
+  // 现在改成 .cf-card 常驻 will-change（见 styles/views.css 的 .cf-card），
+  // 图层从挂载到卸载只有一次栅格化，切卡全程零重栅格，也就不存在"切完闪一下"。
 
   // 专辑数量变化时收敛索引，并把选中项同步给上层
   useEffect(() => {
@@ -240,6 +238,10 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
     let raf = 0;
     let curEl: HTMLElement | null = null;
     let curV = -1;
+    // 跑马灯的测量缓存：宽度、上一帧位移、真实合成倍率（按元素缓存）
+    let trackWidth = new WeakMap<HTMLElement, number>();
+    let trackOffset = new WeakMap<HTMLElement, number>();
+    let trackScale = new WeakMap<HTMLElement, number>();
     /**
      * 读跑马灯时长（秒）。
      * ⚠️ 不能用 getComputedStyle：它要求样式是最新的，而上一帧刚写过 tr.style.transform，
@@ -258,7 +260,13 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
       if (!frameBudget(now)) return;
       const el = sectionRef.current?.querySelector<HTMLElement>('.cf-card.cf-active') ?? null;
       if (!el) return;
-      if (el !== curEl) { curEl = el; curV = -1; }
+      if (el !== curEl) {
+        curEl = el;
+        curV = -1;
+        trackWidth = new WeakMap();
+        trackOffset = new WeakMap();
+        trackScale = new WeakMap();
+      }
       let v = 0;
       const visible = !isWindowInvisible() && isWinFocused();
       if (playbackRef.current && visible) {
@@ -273,10 +281,34 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
         const tracks = sectionRef.current?.querySelectorAll<HTMLElement>(
           '.cf-card.cf-active .cf-meta .marquee .marquee-track'
         );
+        const dpr = window.devicePixelRatio || 1;
         tracks?.forEach((tr) => {
           const d = durationOf(tr);
           const p = ((now / 1000) % d) / d;
-          tr.style.transform = 'translateX(' + (-50 * p).toFixed(3) + '%)';
+          let width = trackWidth.get(tr);
+          if (width === undefined) {
+            const first = tr.firstElementChild as HTMLElement | null;
+            width = first ? first.scrollWidth : tr.scrollWidth / 2;
+            trackWidth.set(tr, width);
+          }
+          // ⚠️ 位移必须落在整设备像素上。原来写的是 -50% * p（小数）：文字层每帧都
+          // 被合成在非整数偏移上，字形边缘一律糊一层灰 —— 长标题滚动时最明显。
+          // 但「设备像素」不等于 1/dpr：这个 track 还在 .cf-card 的 scale+透视里，
+          // 一个 CSS px 实际落到 1.17 * dpr 个物理像素上，所以按 rect/offsetWidth
+          // 量出这张卡的真实倍率再取整，否则等于没对齐。
+          // 26px/s 下每帧只走半个物理像素，取整后的步进肉眼看不出来。
+          let eff = trackScale.get(tr);
+          if (eff === undefined) {
+            const box = tr.getBoundingClientRect();
+            const layout = tr.offsetWidth || box.width;
+            eff = (layout > 0 ? box.width / layout : 1) * dpr;
+            if (!(eff > 0.1)) eff = dpr;
+            trackScale.set(tr, eff);
+          }
+          const snapped = Math.round(-width * p * eff) / eff;
+          if (trackOffset.get(tr) === snapped) return;
+          trackOffset.set(tr, snapped);
+          tr.style.transform = 'translateX(' + snapped.toFixed(3) + 'px)';
         });
       }
     };
@@ -346,17 +378,19 @@ export function Coverflow({ albums, onSelect, onOpen, onPlay, activeAlbumId, pla
           .cf-perspective 是 flex 居中的，所以 zoom 不需要额外补偿 margin。 */}
       <div className="cf-stage" style={{ height: 330 * stageScale }}>
         <div
-          className={"cf-perspective" + (animating ? " cf-animating" : "")}
-          style={{ zoom: stageScale }}
+          className="cf-perspective"
+          style={{ zoom: stageScale, ["--cf-k" as string]: String(CENTER_VIEW_SCALE) } as CSSProperties}
         >
           {entries.map(({ album, index, offset }) => {
             const distance = Math.abs(offset);
             const direction = offset < 0 ? -1 : 1;
             // CSS 变量由设计稿的 transform 规则消费（--x/--z/--s/--r/--o）
+            // 中心卡：z 归零 + s 取视觉倍率（等价 2D 缩放）；
+            // 切卡时这些值仍在 transform 内连续插值，所以动画不会跳变。
             const cssVars = {
               "--x": offset === 0 ? "0px" : direction * (distance === 1 ? X1 : X2) + "px",
-              "--z": offset === 0 ? Z0 + "px" : (distance === 1 ? Z1 : Z2) + "px",
-              "--s": String(offset === 0 ? CENTER_SCALE : distance === 1 ? S1 : S2),
+              "--z": offset === 0 ? "0px" : (distance === 1 ? Z1 : Z2) + "px",
+              "--s": String(offset === 0 ? CENTER_VIEW_SCALE : distance === 1 ? S1 : S2),
               "--r": offset === 0 ? "0deg" : direction * -INWARD_ANGLE + "deg",
               "--o": String(offset === 0 ? 1 : distance === 1 ? 0.96 : 0.84),
             } as CSSProperties;

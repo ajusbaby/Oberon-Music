@@ -37,8 +37,6 @@ const PAD = HANDLE_R + 1;
 const TAU = Math.PI * 2;
 
 /** 比 smoothstep 更平缓：端点一阶二阶导都为 0，收敛处看不出折角 */
-import { useSettingsStore } from "../stores/settingsStore";
-import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "../lib/lowPower";
 import { frameBudget } from "../lib/frameBudget";
 import { isWindowInvisible, onWindowVisibilityChange } from "../lib/winFocus";
 
@@ -58,7 +56,6 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
     hover: 0,
     hoverTarget: false,
     phase: 0,
-    lowPower: false,
     drawnValue: -1,
     drawnPhase: 0,
     dirty: true,
@@ -66,21 +63,12 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
   // 按需点火的入口：effect 内部把真正的 kick 挂在这里。
   // 事件与 props 变化都走它 —— 没有逐帧变化时循环是停着的，必须有人把它叫醒。
   const kickRef = useRef<() => void>(() => {});
-  // 低功耗：波形不再逐帧流动（只在数值变化时重画），rAF 降到 ~30fps
-  const lowPower = useSettingsStore((s) => s.values["lowPower"] === "on");
-  // ⚠️ canvas 的颜色只在"挂载 + resize"时读一次 CSS 变量（见下面的 readColors），
-  // 所以主题一变必须让那个 effect 重跑 —— 否则运行中切昼夜时进度条会一直用旧颜色
-  // （实测：夜间低功耗下主播放条是一条黑进度条，而每次重新挂载的歌词页底栏却是正常的）。
-  const lpTheme = useSettingsStore((s) => s.values[LP_THEME_KEY]);
-  const systemDark = useSystemDark();
-  const darkTheme = lowPower && lpIsDark(parseLpTheme(lpTheme), systemDark);
   live.current.value = value;
   live.current.playing = playing;
-  live.current.lowPower = lowPower;
-  // 进度 / 播放态 / 低功耗开关变化：重画一帧；播放中由循环自己接着跑
+  // 进度 / 播放态变化：重画一帧；播放中由循环自己接着跑
   useEffect(() => {
     kickRef.current();
-  }, [value, playing, lowPower]);
+  }, [value, playing]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -169,18 +157,14 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
     const stillMoving = () => {
       const s = live.current;
       if (s.dragging) return true;
-      if (!reduceMotion && !s.lowPower && s.playing) return true;
+      if (!reduceMotion && s.playing) return true;
       return Math.abs(s.hover - (s.hoverTarget ? 1 : 0)) > 0.002;
     };
 
     function loop(now: number) {
       raf = 0;
-      // 全局帧预算（高刷屏限到 ~60fps）+ 低功耗更严的 30fps 闸
+      // 全局帧预算（高刷屏限到 ~60fps）
       if (!frameBudget(now)) {
-        schedule();
-        return;
-      }
-      if (live.current.lowPower && now - last < 32) {
         schedule();
         return;
       }
@@ -188,7 +172,7 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
       last = now;
       const s = live.current;
 
-      const flowing = !reduceMotion && !s.lowPower && (s.playing || s.dragging);
+      const flowing = !reduceMotion && (s.playing || s.dragging);
       if (flowing) s.phase -= dt * 5.2;
 
       const target = s.hoverTarget ? 1 : 0;
@@ -253,8 +237,7 @@ export function WaveProgress({ value, playing, disabled, onScrub, onCommit }: Wa
       offVisibility();
       ro.disconnect();
     };
-    // darkTheme 进依赖：切昼夜时重新读色并重画（lowPower 走 ref，不需要重跑）
-  }, [darkTheme]);
+  }, []);
 
   /** 把客户端 x 换算成 0..1（按扣掉左右留白后的有效区间） */
   const ratioAt = useCallback((clientX: number) => {

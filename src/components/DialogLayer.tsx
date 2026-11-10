@@ -4,6 +4,7 @@ import * as api from "../api/ipc";
 import type { Track } from "../api/types";
 import { useUiStore, toast } from "../stores/uiStore";
 import { usePlaylistStore } from "../stores/playlistStore";
+import { usePlayerStore } from "../stores/playerStore";
 import { nav } from "../stores/navStore";
 import { Icon } from "./Icon";
 import { Cover } from "./Cover";
@@ -16,6 +17,7 @@ export function DialogLayer() {
   const createPlaylist = usePlaylistStore((s) => s.create);
   const renamePlaylist = usePlaylistStore((s) => s.rename);
   const refreshPlaylists = usePlaylistStore((s) => s.refresh);
+  const playTrack = usePlayerStore((s) => s.playTrack);
 
   const [name, setName] = useState("");
   const [invalid, setInvalid] = useState(false);
@@ -229,7 +231,7 @@ export function DialogLayer() {
           <>
             <div className="dialog-title">添加歌曲</div>
             <div className="dialog-label">
-              已选 {picked.length} 首 · 可多选（显示前 500 首，可用关键词过滤）
+              已选 {picked.length} 首 · 单击多选，双击直接播放（显示前 500 首，可用关键词过滤）
             </div>
             <input
               className="dialog-input"
@@ -252,6 +254,11 @@ export function DialogLayer() {
                           checked ? prev.filter((id) => id !== track.id) : [...prev, track.id]
                         )
                       }
+                      /* 双击直接播这首：队列取当前过滤结果，和用户眼前看到的列表一致。
+                         刻意不关对话框 —— 边挑边试听才是这个页面最常见的用法。 */
+                      onDoubleClick={() => {
+                        void playTrack(track.id, filteredTracks.map((t) => t.id));
+                      }}
                     >
                       <span className={"dialog-check" + (checked ? " on" : "")}>
                         {checked ? <Icon name="check" size={12} /> : null}

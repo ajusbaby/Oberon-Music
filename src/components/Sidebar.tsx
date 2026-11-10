@@ -48,8 +48,10 @@ export function Sidebar() {
       confirmText: "删除",
       onConfirm: () => {
         void (async () => {
-          await removePlaylist(id);
+          // 先离开可能正在显示它的详情页，再删：否则列表版本一变，详情页会去读一个
+          // 已经不存在的 id，弹出「读取播放列表失败」的误报。
           if (view.name === "playlist" && view.id === id) nav.library("tracks");
+          await removePlaylist(id);
           toast("已删除播放列表「" + name + "」", "success");
         })();
       },

@@ -1,5 +1,5 @@
 /* 统计页：区间切换 + 大字总时长 + 无纵轴柱状图 + 两项指标 + 歌曲明细。
-   动画只用 transform / opacity，且全部在低功耗、失焦、最小化和 reduced-motion 下关闭。 */
+   动画只用 transform / opacity，且全部在失焦、最小化和 reduced-motion 下关闭。 */
 
 .stats-view {
   --stats-bar-radius: 16px;
@@ -390,29 +390,9 @@
   }
 }
 
-.app-shell.low-power .stats-bar-fill,
-.app-shell.low-power .stats-row {
-  animation: none;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .stats-bar-fill,
   .stats-row {
     animation: none;
   }
-}
-
-/* ---------- 夜间 ---------- */
-
-.app-shell.theme-dark .stats-view {
-  --stats-bar-ink: #f4f4f6;
-}
-
-.app-shell.theme-dark .stats-bar.is-empty .stats-bar-fill {
-  opacity: 0.2;
-}
-
-.app-shell.theme-dark .stats-seg-btn.active {
-  background: var(--ob-text-primary);
-  color: #14141a;
 }

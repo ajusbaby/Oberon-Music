@@ -36,12 +36,10 @@ function markSplashSeen(): void {
 const LEAVE_MS = 650;
 
 interface Props {
-  /// 低功耗模式：霜层更实、光斑更淡（见 styles/splash.css 末尾）
-  lowPower: boolean;
   onDone: () => void;
 }
 
-export function SplashScreen({ lowPower, onDone }: Props) {
+export function SplashScreen({ onDone }: Props) {
   const [leaving, setLeaving] = useState(false);
   // 用 ref 而不是 state 做幂等闸门：按钮点击、回车、空格都可能同时到达
   const leavingRef = useRef(false);
@@ -83,7 +81,7 @@ export function SplashScreen({ lowPower, onDone }: Props) {
 
   return (
     <div
-      className={"splash" + (leaving ? " is-leaving" : "") + (lowPower ? " splash--lp" : "")}
+      className={"splash" + (leaving ? " is-leaving" : "")}
       role="dialog"
       aria-label="Oberon 开屏"
     >

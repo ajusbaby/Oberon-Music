@@ -25,8 +25,7 @@ export function AnimatedNumber({ value, format, className }: AnimatedNumberProps
     // 首次挂载从 0 滚上来；之后每次数值更新都从上一次的落点接着滚
     const from = fromRef.current ?? 0;
     fromRef.current = value;
-    const shell = el.closest(".app-shell");
-    const calm = prefersReduced() || (shell ? shell.classList.contains("low-power") : false);
+    const calm = prefersReduced();
     const diff = Math.abs(value - from);
     if (calm || diff === 0 || diff < Math.max(0.04, Math.abs(value) * 0.005)) {
       el.textContent = format(value);

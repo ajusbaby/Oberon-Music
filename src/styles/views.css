@@ -168,17 +168,6 @@
     cursor: default;
 }
 
-/* 设置项标题后面的小标记（如"需先开启低功耗"） */
-.settings-badge {
-    margin-left: 8px;
-    padding: 1px 7px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--color-text-tertiary);
-    background: var(--color-surface-secondary);
-}
-
 .chip-row {
     display: flex;
     align-items: center;
@@ -412,6 +401,26 @@
 
 .album-card:hover {
     transform: translateY(-4px);
+}
+
+/* ===== 封面图淡入 =====
+   容器本身带着占位渐变（见 components/Cover.tsx），图片只是叠在上面淡入。
+   只动 opacity：不触发布局、不带模糊，冷缓存下第一次进专辑页看到的是
+   "渐变换成封面"，而不是整墙封面白闪一下。 */
+.cover-img {
+    opacity: 0;
+    transition: opacity 180ms ease-out;
+}
+
+.cover-img.is-ready {
+    opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cover-img {
+        transition: none;
+        opacity: 1;
+    }
 }
 
 .album-cover {
@@ -865,6 +874,40 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+}
+
+/* ===== 视图切换进场 =====
+   换页时整块内容淡入 + 轻微上浮。只动 opacity / transform —— 两个都是合成器属性，
+   不触发布局、不重绘正文，200ms 一次性播放，不占常驻帧预算。
+
+   触发方式是 App.tsx 里 key 变化让 React 换掉整棵子树（.view-swap），
+   所以不需要任何 JS 计时器或「正在切换」的状态位。
+
+   ⚠️ 刻意不在 .win-blur / .win-hidden 下暂停：填充模式是 both，
+   暂停会把整块内容钉死在 opacity:0 的首帧。 */
+.view-swap {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    animation: view-swap-in 200ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes view-swap-in {
+    from {
+        opacity: 0;
+        transform: translate3d(0, 8px, 0);
+    }
+    to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .view-swap {
+        animation: none;
+    }
 }
 
 /* 视图根容器：撑满主内容并允许内部滚动 */
@@ -1342,6 +1385,36 @@
     -webkit-font-smoothing: antialiased;
 }
 
+/* ===== 卡片统一坐标系：整卡常驻 zoom，槽位倍率全部交给 transform =====
+   transform 是「先按 1× 栅格化、再由合成器把位图拉大」，静态图层的栅格比例一旦定下就不会重算，
+   所以被放大的歌名/艺术家会永久发虚（实测锐度 std 65 vs 播放条原生文本 85）。
+   修法：每张卡都常驻 zoom(=K) —— 文字按放大后的尺寸排版并栅格化；
+   槽位尺寸改用 scale(s/K)、水平偏移改用 x/K，视觉大小与位置分毫不变。
+   好处是缩放始终留在 transform 里平滑插值，切卡时不再需要「先退回 transform、落定再切回 zoom」，
+   也就不会出现「模糊 → 卡一下 → 清晰」的重栅格跳变。 */
+.cf-perspective {
+    --cf-k: 1.16136;
+    /* 卡片的局部坐标整体放大 K 倍，透视距离同步放大 K 倍才能保持同一个投影 */
+    perspective: calc(1400px * var(--cf-k));
+}
+
+.cf-card {
+    zoom: var(--cf-k);
+    /* zoom 以左上角为锚点：抵掉 (K-1)/2 的高度差，再折算回 zoom 之后的空间 */
+    top: calc((4px - 150px * (var(--cf-k) - 1)) / var(--cf-k));
+    transform:
+        translateX(calc(var(--x) / var(--cf-k)))
+        translateZ(var(--z))
+        scale(calc(var(--s) / var(--cf-k)))
+        rotateY(var(--r));
+    /* 常驻提升合成层。**不要**改成「切卡时临时 will-change、结束再撤掉」那种写法：
+       撤掉 will-change 会销毁图层，整张卡（含封面大图）被迫重新栅格化一次，
+       实测切换后 ~900ms 卡片区域一次性变化 1 万多个像素 —— 观感就是海报"闪一下"。
+       常驻之后图层从挂载到卸载只栅格化一次；卡片只有 5 张、尺寸 260×348，
+       显存代价可忽略（卡片的 backdrop-filter 已在下面关掉）。 */
+    will-change: transform, opacity;
+}
+
 /* ===== 封面流自适应舞台（全屏/大窗口下整体放大）===== */
 /* .cf-perspective 保持设计稿的 920×330 基准尺寸，由外层按可用空间缩放，
    内部 X/缩放/景深等常量因此完全不受影响。 */
@@ -1656,16 +1729,16 @@
     background-size: 120px 120px, auto;
     background-repeat: repeat, no-repeat;
     background-blend-mode: overlay, normal;
-    /* 窗口轮廓的线宽/颜色：轮廓本体画在最高的 ::before 层（见下方 .app-shell::before）。
-       颜色用不透明实色而不是半透明：半透明线叠在不同底色上（侧栏白 / 主区光雾 / 播放条霜面）
-       会得到四个不同的亮度，加上非整数缩放下边缘那半个物理像素的抗锯齿，
-       右边和下边看起来就比左边和上边细一档。实色四边完全一致。 */
-    --shell-border-width: 2px;
-    --shell-edge: #cfd4dd;
-    /* 边线内侧再压一道 1px 高光：四边内侧的底色本来是三个不同的值（侧栏白 / 主区灰 /
-       播放条霜面），同样的线压在灰底上会比压在白底上显得细一档。垫一条亮线之后
-       四边都变成「深线 + 亮线」两段，粗细与浓度在视觉上才拉平。 */
-    --shell-inner-glow: rgba(255, 255, 255, 0.55);
+    /* 窗口不做描边：1px 的轮廓在非整数缩放下（794.4 CSS 高 → 993 个设备像素）
+       底边会被最后那个不完整设备像素吃掉大半，四条边永远做不到一样细，
+       而加粗补底边又会让底边显成 2px。窗口本身有 30px 的投影过渡到桌面，
+       边界已经清楚，所以轮廓整条关掉。线宽变量保留给各处圆角内缩计算用。 */
+    --shell-border-width: 0px;
+    --shell-edge: transparent;
+    /* 内侧高光原来是给 2px 灰线垫的，用来拉平「灰线压白底 / 压灰底」的浓淡差。
+       1px 纯黑对比度足够，再垫一条亮线会被读成 2px 双线框，所以这里直接关掉（保留变量名，
+       将来要恢复只需给它一个颜色）。 */
+    --shell-inner-glow: transparent;
     border: 0;
     box-shadow:
         0 12px 30px -24px rgba(0, 0, 0, 0.42),
@@ -1762,7 +1835,7 @@
     background:
         linear-gradient(145deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.3) 50%, rgba(255, 255, 255, 0.4) 100%),
         rgba(242, 242, 245, 0.82);
-    border: 1px solid rgba(255, 255, 255, 0.5);
+    border: 1px solid rgba(17, 17, 19, 0.55);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 0 18px rgba(255, 255, 255, 0.14);
 }
 
@@ -1923,7 +1996,8 @@
 .app-shell > .bottom-player {
     border-radius: 0 0 var(--player-radius-bottom) var(--player-radius-bottom);
     clip-path: inset(
-        0 round 0 0 calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
+        0 round 0 0
+            calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
             calc(var(--player-radius-bottom) - var(--shell-border-width, 2px))
     );
 }
@@ -1962,267 +2036,7 @@
     }
 }
 
-/* ===== 低功耗模式（设置页开关，默认关闭）=====
-   为什么是"减层 / 去动画 / 去实时模糊"，而不是"降分辨率"：
-   docs/低配机三问题-诊断与解决方案.md §4.6 的实测表明歌词页开销 ≈ 10 点固定 + 1.15 点/Mpx，
-   固定项来自「逐帧失效的大面积模糊/混合层 + 常驻提升层 + 跑满刷新率的 rAF」。
-   所以这里按收益从大到小处理，且全部只在 .app-shell.low-power 下生效 —— 关掉开关时视觉与现在完全一致。
-
-   ① 首页光雾（WebGL 全屏 30fps）直接不渲染（App.tsx 里 active 已带 !lowPower，这里兜底）
-   ② 歌词页背景不再 drift：drift 动画会让它上方所有 mix-blend-mode / backdrop-filter 每帧失效重算
-   ③ 去掉两层全窗混合（.bg-tint 的 screen、.grain 的 soft-light）与常驻 will-change 提升层
-   ④ 毛玻璃 → 实色：backdrop-filter 是"每帧重算"的大项（底栏 120px 全宽 + .glass 卡片）
-   ⑤ 歌词逐行渐进模糊（约 55 个滤镜表面→内联 filter，必须 !important 才能盖掉）关闭
-   ⑥ 首页卡片不再常驻提升层；播放中光晕动画停止
-   ⑦ 歌词页打开时，被完全遮住的主界面停止绘制（visibility 而非 display：保留布局，避免关页时跳版） */
-/* 外壳与侧栏的全窗口 backdrop-filter：它模糊的是"窗口背后的桌面"，而外壳底色约 98% 不透明
-   —— 视觉上只透过去 2%，几乎看不出来，但每次失效都要对整窗做一次高斯模糊。
-   首页那 ~11 点里的大头就是它（实测：关掉后首页从 11 点降到个位数）。 */
-.app-shell.low-power {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-}
-
-.app-shell.low-power .sidebar {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-}
-
-.app-shell.low-power .home-ambient {
-    display: none;
-}
-/* 低功耗歌词页底栏：白底 + 深色控件（页身已改写为 sl-* 系列，配色见 lyrics.css） */
-.app-shell.low-power .lyrics-page .lyrics-footer .bottom-player {
-    background: #FFFFFF;
-    border: 0;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    box-shadow: none;
-}
-
-/* ⚠️ 波形进度条的颜色变量 --wp-track/--wp-active 在歌词主题里定义在**更深一层**的元素上
-   （lyrics.css:624-625，白波），只写在 .bottom-player 上会被那层盖掉 → 白波画在白底上，
-   看起来就是"进度条消失了"。这里用后代通配把变量压在每一层。 */
-.app-shell.low-power .lyrics-page .lyrics-footer .bottom-player,
-.app-shell.low-power .lyrics-page .lyrics-footer .progress-area,
-.app-shell.low-power .lyrics-page .lyrics-footer .progress-slider,
-.app-shell.low-power .lyrics-page .lyrics-footer .progress-slider * {
-    --wp-track: rgba(0, 0, 0, 0.14);
-    --wp-active: #1D1D1F;
-}
-
-.app-shell.low-power .lyrics-page .lyrics-footer .ctrl-btn,
-.app-shell.low-power .lyrics-page .lyrics-footer .favorite-btn,
-.app-shell.low-power .lyrics-page .lyrics-footer .right-icon-btn,
-.app-shell.low-power .lyrics-page .lyrics-footer .player-track-name,
-.app-shell.low-power .lyrics-page .lyrics-footer .time-label {
-    color: var(--color-text-primary);
-}
-
-.app-shell.low-power .lyrics-page .lyrics-footer .ctrl-btn.play-btn {
-    background: #1D1D1F;
-    color: #FFFFFF;
-}
-
-.app-shell.low-power .lyrics-page .lyrics-footer .player-track-artist {
-    color: var(--color-text-tertiary);
-}
-
-.app-shell.low-power .lyrics-page .lyrics-footer .favorite-btn.favorited {
-    color: #E0245E;
-}
-
-/* ===== 低功耗 × 夜间主题（应用内开关，**低功耗独占**）=====
-   设置项 `lowPowerTheme`：跟随系统 / 白天 / 夜间（默认跟随系统）。App.tsx 把它算成外壳上的
-   `.theme-dark` 类，而且**只有低功耗模式开着**才可能带上 —— 所以这套配色只作用于低功耗档位，
-   默认（非低功耗）那套浅色主题完全不受影响。
-
-   范围是**整个应用**：外壳、侧栏、搜索框、卡片、设置块、主播放条，以及歌词页。原因是低功耗
-   档位下它们本来就是同一套浅色亚克力，晚上整屏白都刺眼。
-
-   原则仍是"低功耗 = 减层"：夜间配色**全部是实色**，不做任何模糊 / 混合 / backdrop-filter ——
-   这恰好也是低功耗本来就在做的"毛玻璃换实色"。 */
-.app-shell.low-power.theme-dark {
-    /* 原生控件（滚动条等）跟着变暗 */
-    color-scheme: dark;
-
-    /* ① 变量层：文字 / 边框 / 分隔线 / 悬停 / 卡片底 全部跟着走（内容区绝大多数规则都用它们） */
-    --color-background: #131316;
-    --color-surface: #1B1B1F;
-    --color-surface-secondary: #232328;
-    --color-text-primary: #F2F2F5;
-    --color-text-secondary: #A1A1A8;
-    --color-text-tertiary: #7C7C84;
-    --color-border: rgba(255, 255, 255, 0.09);
-    --color-divider: rgba(255, 255, 255, 0.07);
-    --color-hover: rgba(255, 255, 255, 0.06);
-    --color-active: rgba(255, 255, 255, 0.10);
-    --color-sidebar: #17171A;
-    /* 警告色（如独占回退原因）：深色底上要用更亮的 Amber */
-    --color-warn: #E8A33D;
-    --card-glass-bg: #1B1B1F;
-    --shadow-card: 0 5px 20px rgba(0, 0, 0, 0.35);
-    --shadow-panel: 0 12px 40px rgba(0, 0, 0, 0.45);
-    --shadow-player: 0 12px 40px rgba(0, 0, 0, 0.45);
-
-    /* ② 材质层：外壳自己那层写死的白色亚克力渐变 */
-    background: #131316;
-    /* 深色下轮廓换成 14% 白，深底上才看得见边界 */
-    --shell-edge: #45454e;
-    --shell-inner-glow: rgba(255, 255, 255, 0.07);
-    box-shadow: 0 12px 30px -24px rgba(0, 0, 0, 0.6);
-}
-
-/* 颗粒与光泽带在深色下要收敛，否则整屏发灰。
-   注意 ::before 现在承担窗口轮廓，必须保持不透明，收敛只作用于旧颗粒层的语义。 */
-.app-shell.low-power.theme-dark::before {
-    opacity: 1;
-}
-
-.app-shell.low-power.theme-dark::after {
-    background:
-        linear-gradient(
-            115deg,
-            rgba(255, 255, 255, 0.05) 0%,
-            rgba(255, 255, 255, 0) 34%,
-            rgba(255, 255, 255, 0) 66%,
-            rgba(255, 255, 255, 0.03) 100%
-        ),
-        radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0) 62%);
-}
-
-/* 侧栏 / 搜索框 / 设置块：同一批写死的白色材质 */
-.app-shell.low-power.theme-dark .sidebar {
-    background: #17171A;
-    border-right-color: rgba(255, 255, 255, 0.07);
-}
-
-.app-shell.low-power.theme-dark .search-bar {
-    background: #232328;
-    border-color: rgba(255, 255, 255, 0.08);
-    box-shadow: none;
-}
-
-.app-shell.low-power.theme-dark .settings-block {
-    border-color: rgba(255, 255, 255, 0.07);
-}
-
 /* ⚠️ 亮色主题里"实心主按钮 / 选中 chip"是「深底 + 白字」（background: var(--color-text-primary);
-   color: #fff）。变量一翻转，底变成浅色而字还是白的 → 白底白字（截图里"顺序播放"那个选中态
-   完全看不见）。所以这几处的字色必须跟着一起翻：浅底 + 深字。 */
-.app-shell.low-power.theme-dark .pill-btn.primary,
-.app-shell.low-power.theme-dark .chip.active {
-    color: #131316;
-}
-
-.app-shell.low-power.theme-dark .dialog-check.on svg {
-    fill: #131316;
-}
-
-/* ⚠️ 一批"悬停/选中/浮层"的背景是写死的 0.72~0.92 白（不走变量），浅色下没问题，
-   到了夜间就是一条刺眼的白条（用户反馈：曲目条悬停那一下太白）。这里统一换掉：
-   行悬停/选中 → 薄薄一层白；浮层（右键菜单/吐司/扫描横幅/文件夹条/封面流卡片）→ 实色表面。 */
-.app-shell.low-power.theme-dark .track-row:hover,
-.app-shell.low-power.theme-dark .track-row.playing,
-.app-shell.low-power.theme-dark .artist-row:hover,
-.app-shell.low-power.theme-dark .dialog-list-item:hover,
-.app-shell.low-power.theme-dark .dialog-track:hover,
-.app-shell.low-power.theme-dark .dialog-track.checked {
-    background: rgba(255, 255, 255, 0.10);
-}
-
-/* 正在播放那行的橙色标题在深底上要提亮，否则对比度不够 */
-.app-shell.low-power.theme-dark .track-row.playing .track-title {
-    color: #E8A87C;
-}
-
-.app-shell.low-power.theme-dark .context-menu,
-.app-shell.low-power.theme-dark .toast,
-.app-shell.low-power.theme-dark .scan-banner,
-.app-shell.low-power.theme-dark .folder-strip {
-    background: #232328;
-    border-color: rgba(255, 255, 255, 0.08);
-}
-
-.app-shell.low-power.theme-dark .folder-strip:hover {
-    background: #2B2B31;
-}
-
-/* ⚠️ 首页封面流卡片（.cf-card）**刻意不跟着夜间主题变深**：它是深色页面上的一层"白色玻璃"，
-   按需求保留 design.css 原来的材质 —— 半透白底 + 白描边 + 白内高光/内描边都不覆盖。
-   卡片上的 .cf-meta h3/p 是近黑色文字，正因为卡片是浅色才成立，所以也不能改。
-   （设计上它相当于"深色舞台中央的实物唱片"，跟侧栏/列表那类界面 chrome 不是一回事。） */
-
-/* 主播放条：深色实底；波形进度条那两个变量也得反转（原本是"白条上的黑波"） */
-.app-shell.low-power.theme-dark > .bottom-player {
-    background-color: #1B1B1F;
-    box-shadow: 0 -14px 34px -18px rgba(0, 0, 0, 0.5);
-}
-
-.app-shell.low-power.theme-dark > .bottom-player,
-.app-shell.low-power.theme-dark > .bottom-player .progress-area,
-.app-shell.low-power.theme-dark > .bottom-player .progress-slider,
-.app-shell.low-power.theme-dark > .bottom-player .progress-slider * {
-    --wp-track: rgba(255, 255, 255, 0.22);
-    --wp-active: #FFFFFF;
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .bottom-player {
-    background: #1B1B1F;
-    border: 0;
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .bottom-player,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .progress-area,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .progress-slider,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .progress-slider * {
-    --wp-track: rgba(255, 255, 255, 0.22);
-    --wp-active: #FFFFFF;
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .ctrl-btn,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .favorite-btn,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .right-icon-btn,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .player-track-name,
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .time-label {
-    color: rgba(255, 255, 255, 0.92);
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .ctrl-btn.play-btn {
-    background: #FFFFFF;
-    color: #131316;
-}
-
-.app-shell.low-power.theme-dark .lyrics-page .lyrics-footer .player-track-artist {
-    color: rgba(255, 255, 255, 0.5);
-}
-
-/* ===== 低功耗：卡片改成「最普通的卡片」 =====
-   平坦实色 + 一条极细描边，没有玻璃、没有投影、没有内高光。
-   为什么不只是"把模糊关掉"：卡片材质里的 box-shadow / border-color 一旦参与过渡，
-   切卡时会**逐帧重画阴影**（阴影无法走合成层）—— 那才是切换动画里真正的臃肿。
-   换成平坦材质后，切卡只剩 transform + opacity 两种合成层属性（60fps 动画保留）。
-   卡片保持白卡（与原来一致，卡片上是近黑文字才成立）—— 这也是既有决定：
-   首页卡片是深色页面上的一层白玻璃/白卡，刻意不跟着夜间主题变深。 */
-.app-shell.low-power .cf-card {
-    will-change: auto;
-    background: #FFFFFF;
-    border: 1px solid rgba(0, 0, 0, 0.08);
-    box-shadow: none;
-    transition:
-        transform 460ms cubic-bezier(.22, 1, .36, 1),
-        opacity 320ms ease;
-}
-
-.app-shell.low-power .cf-card.cf-active {
-    box-shadow: none;
-    border-color: rgba(0, 0, 0, 0.16);
-}
-
-/* 低功耗：播放中那圈光晕本来就已停动画，这里连这一层也去掉（少一个整卡大小的图层） */
-.app-shell.low-power .cf-card.cf-active::after {
-    display: none;
-}
 
 /* ===== 装饰性无限动画的「暂停闸」 =====
    CSS 无限动画由**合成器按刷新率**驱动（120/144/180Hz 屏上就是 120/144/180 帧/秒），
@@ -2254,12 +2068,10 @@
 .app-shell.lyrics-covered .app-body,
 .app-shell.lyrics-covered > .bottom-player {
     visibility: hidden;
-}
-
-/* ⚠️ 这里曾经是 `.low-power:has(.lyrics-page) .app-body { visibility: hidden }`（让被遮住的主界面
+}`（让被遮住的主界面
    停止绘制）。实测副作用：**从歌词页返回时主界面会先闪一下纯白** —— 隐藏期间合成器丢掉了它的
-   绘制结果，重新可见时要重画一帧。低功耗模式下主界面本来是静止的（光雾已关、光晕/波形已停），
-   静态内容的绘制成本≈0，所以整条规则删掉，用体验换那一点点收益不划算。 */
+   绘制结果，重新可见时要重画一帧。被遮住的主界面基本是静止内容，绘制成本≈0，
+   所以整条规则删掉，用体验换那一点点收益不划算。 */
 
 /* ===== 渲染异常兜底（src/components/ErrorBoundary.tsx）=====
    样式故意做得「安静」：出故障时用户最先要的是能读到发生了什么 + 一个明确的出口，
@@ -2371,29 +2183,6 @@
     width: 15px;
     height: 15px;
     display: block;
-}
-
-/* 夜间主题：同一套信号换暖橙 #E8A87C，别用亮橙压在深底上 */
-.app-shell.low-power.theme-dark .track-row.playing {
-    background: rgba(232, 168, 124, 0.14);
-}
-
-.app-shell.low-power.theme-dark .track-row.playing:hover {
-    background: rgba(232, 168, 124, 0.2);
-}
-
-
-
-.app-shell.low-power.theme-dark .track-row.playing .track-title {
-    color: #E8A87C;
-}
-
-.app-shell.low-power.theme-dark .track-index-btn {
-    color: #E8A87C;
-}
-
-.app-shell.low-power.theme-dark .track-index-btn:hover {
-    color: #F3C6A4;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2698,68 +2487,6 @@
     }
 }
 
-/* 低功耗：一次性入场动画也省掉（它是合成层的额外一遍），直接出现 */
-.app-shell.low-power .search-overlay,
-.app-shell.low-power .search-panel {
-    animation: none;
-}
-
-/* 低功耗 × 夜间：`--ob-*` 的文字与边框必须在这里重新赋值。
-   :root 里那套是给浅色底算的，深色外壳直接沿用 = 深底深字（本次浮层就踩了这个坑：
-   面板已经是深板了，字还是 #17202B，等于没有字）。 */
-.app-shell.low-power.theme-dark {
-    --ob-surface: #17171A;
-    --ob-surface-raised: #202026;
-    --ob-surface-solid: #1B1B1F;
-    --ob-surface-muted: #17171A;
-    --ob-border-subtle: rgba(255, 255, 255, 0.08);
-    --ob-border-default: rgba(255, 255, 255, 0.12);
-    --ob-border-strong: rgba(255, 255, 255, 0.18);
-    --ob-inset-highlight: rgba(255, 255, 255, 0.06);
-    --ob-text-primary: #F2F2F5;
-    --ob-text-secondary: #A1A1A8;
-    --ob-text-tertiary: #8C8C95;
-    --ob-text-disabled: #6A6A72;
-    --ob-accent: #E8A87C;
-    --ob-accent-soft: rgba(232, 168, 124, 0.14);
-    --ob-accent-line: rgba(232, 168, 124, 0.34);
-    --ob-focus: #7FB2F0;
-    --ob-danger: #F2765F;
-}
-
-.app-shell.low-power.theme-dark .search-overlay {
-    background: rgba(0, 0, 0, 0.5);
-}
-
-.app-shell.low-power.theme-dark .search-panel {
-    background: #1B1B1F;
-    border-color: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 28px 64px -24px rgba(0, 0, 0, 0.72);
-}
-
-.app-shell.low-power.theme-dark .search-hit:hover {
-    background: rgba(255, 255, 255, 0.06);
-}
-
-.app-shell.low-power.theme-dark .search-hit.is-active {
-    background: rgba(255, 255, 255, 0.09);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
-}
-
-.app-shell.low-power.theme-dark .search-hit-glyph {
-    background: rgba(255, 255, 255, 0.08);
-    color: #A1A1A8;
-}
-
-.app-shell.low-power.theme-dark .search-hit-kind {
-    background: rgba(255, 255, 255, 0.07);
-}
-
-.app-shell.low-power.theme-dark .search-kbd {
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.12);
-}
-
 @media (prefers-reduced-motion: reduce) {
     .search-overlay,
     .search-panel {
@@ -2771,5 +2498,4 @@
         transition: none;
     }
 }
-
 

@@ -1,6 +1,6 @@
 //! 启动时按显示器工作区定窗口尺寸。
 //!
-//! tauri.conf.json 里的 1267×902 是「理想尺寸」，不是所有机器都放得下：
+//! tauri.conf.json 里的 1064×794 是「理想尺寸」，不是所有机器都放得下：
 //! 14 寸笔记本常见的 1920×1080@150% 只有约 1280×680 逻辑像素可用，
 //! 照配置开窗会上下出屏，而配置里写死的 minHeight 768 还让用户连拖小都拖不动。
 //!
@@ -10,8 +10,8 @@
 use tauri::WebviewWindow;
 
 /// 设计稿尺寸（逻辑像素）
-pub const DESIGN_W: f64 = 1267.0;
-pub const DESIGN_H: f64 = 902.0;
+pub const DESIGN_W: f64 = 1064.0;
+pub const DESIGN_H: f64 = 794.0;
 
 /// 布局还站得住的下限。再小就该上紧凑样式了，而不是继续压窗口。
 pub const FLOOR_W: f64 = 960.0;
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn laptop_150_percent_gets_a_shorter_window() {
         let f = fit_for(1280.0, 680.0);
-        // 902 → 672：这正是「14 寸装好就出屏」那段高度差，宽度 1280 仍放得下设计稿的 1267
+        // 794 → 672：14 寸工作区仍需按可用高度收缩，宽度保持设计尺寸
         assert_eq!(f.width, DESIGN_W);
         assert_eq!(f.height, 672.0);
         // minHeight 768 是旧配置的硬伤，这里必须落到 600

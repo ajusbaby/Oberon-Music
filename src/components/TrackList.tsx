@@ -57,7 +57,9 @@ export function TrackList({
   onLoadMore,
   resetKey,
 }: TrackListProps) {
-  const player = usePlayerStore((s) => s.state);
+  // 只订阅两个基元：player.state 整体订阅会在播放进度事件里跟着重渲染整张列表
+  const currentId = usePlayerStore((s) => s.state?.current?.trackId ?? null);
+  const playerStatus = usePlayerStore((s) => s.state?.status ?? "stopped");
   const playTrack = usePlayerStore((s) => s.playTrack);
   const togglePlay = usePlayerStore((s) => s.toggle);
   const openDialog = useUiStore((s) => s.openDialog);
@@ -176,10 +178,10 @@ export function TrackList({
           <div className="list-inner" style={{ height: rowCount * ROW_HEIGHT }}>
             {visible.map((track, i) => {
               const index = start + i;
-              const playing = player?.current?.trackId === track.id;
+              const playing = currentId !== null && currentId === track.id;
               // 「当前曲目」和「正在响」是两件事：暂停后 current 仍是这首，
               // 行首图标要跟着 status 在播放/暂停之间换，否则暂停时还显示暂停符号
-              const isPlaying = playing && player?.status === "playing";
+              const isPlaying = playing && playerStatus === "playing";
               return (
                 <div
                   key={track.id}

@@ -14,7 +14,7 @@
  *
  * 三层结构：
  *   底色       纯黑 / 纯白（.sl-veil + .sl-disc，同时承担进场动画）
- *   背景内容   流光 canvas（.sl-light，见 FlowingLight.tsx）；低功耗时为纯色
+ *   背景内容   流光 canvas（.sl-light，见 FlowingLight.tsx）
  *   内容       顶栏 / 歌词（整页居中） / 底栏
  *
  * 三条硬规则（改动前请先对回设计文档）：
@@ -62,7 +62,7 @@
 }
 
 /* 明暗主题不再分叉：原来 .is-light 那一整套「封面主色做前景」已合并进上面的统一浅色。
-   类名仍由组件输出（views.css 的低功耗覆盖按它选元素），但它不再改写任何颜色变量。 */
+   类名仍由组件输出，但它不再改写任何颜色变量。 */
 
 /* ===== 第一层：底色（同时是进场的那个圆）=====
    进度：圆盘从封面中心绽开 → 底色淡入兜住窗口四角。两者同色，观感就是
@@ -118,12 +118,7 @@
     transition: opacity 560ms ease;
 }
 
-.lyrics-page.is-flat .sl-stage {
-    /* 低功耗：没有流光动画，底色仍是同一套封面基色，观感一致 */
-    background: rgb(var(--sl-page-rgb, 255 255 255));
-}
-
-/* 画布下面的纯色兜底：纹理没到位/低功耗时，这里就是整页的底色 */
+/* 画布下面的纯色兜底：纹理没到位时，这里就是整页的底色 */
 .sl-stage::before {
     content: "";
     position: absolute;
@@ -412,7 +407,7 @@
 /* 逐句扫过（规范 I.3）：当前句原文行按 --sl-k 从左往右"点亮"。
    已唱 = 实色，未唱 = 34% 灰，交界处 5% 宽做柔化 —— 用 background-clip:text
    而不是复制一层文本，也不给每个字套 span：一行一个渐变，每帧只改一个自定义属性。
-   （--sl-k 由 LyricsPage 的 rAF 循环写入；静止/低功耗/无时间轴时缺省为 1 = 整行实色。） */
+   （--sl-k 由 LyricsPage 的 rAF 循环写入；静止/无时间轴时缺省为 1 = 整行实色。） */
 .sl-g.is-active .sl-line:not(.is-tr) .sl-in {
     background-image: linear-gradient(
         90deg,
@@ -532,18 +527,6 @@
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     color: var(--sl-fg);
-}
-
-/* 底栏文字落在"高饱和 + 高斯模糊"的流光上，白字一旦带透明度就发虚。
-   把文字改成实色（见下方各条的 alpha），底色由 .sl-lyrics-area::after 那条
-   连续渐变统一提供 —— 底栏自己不垫第二层，避免叠成一块边界分明的平板。 */
-
-/* 低功耗那套「白底 / 夜底」底栏规则在 views.css（特异性 0,5,0），
-   这里只把底改成透明 —— 底栏与页面同色，不分层。 */
-.app-shell.low-power .lyrics-page.is-light .lyrics-footer .bottom-player,
-.app-shell.low-power .lyrics-page.is-dark .lyrics-footer .bottom-player {
-    background: transparent;
-    box-shadow: none;
 }
 
 .lyrics-page .lyrics-footer .ctrl-btn {
@@ -758,19 +741,6 @@
     .sl-g.is-near {
         transition: none;
     }
-}
-
-/* ===== 低功耗：不做阶梯模糊（JS 已关），也不做分层错峰 ===== */
-.lyrics-page.is-flat .sl-topbar,
-.lyrics-page.is-flat .sl-lyrics-area,
-.lyrics-page.is-flat .sl-footer,
-.lyrics-page.is-flat .sl-light,
-.lyrics-page.is-flat.swapping .sl-lyrics {
-    animation: none;
-}
-
-.lyrics-page.is-flat .sl-light {
-    display: none;
 }
 
 /* ===== 窄窗口：留白收窄，底栏只留控件与进度 ===== */

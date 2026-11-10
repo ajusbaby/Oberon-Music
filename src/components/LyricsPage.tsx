@@ -25,7 +25,6 @@ import { FALLBACK_LOOK, sampleCover } from "../lib/coverColor";
 import type { CoverLook } from "../lib/coverColor";
 import { useCover } from "../lib/cover";
 import { frameBudget } from "../lib/frameBudget";
-import { LP_THEME_KEY, lpIsDark, parseLpTheme, useSystemDark } from "../lib/lowPower";
 import { usePlayerStore } from "../stores/playerStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
@@ -83,12 +82,10 @@ export function LyricsPage() {
   const closeLyrics = useUiStore((s) => s.closeLyrics);
   const origin = useUiStore((s) => s.lyricsOrigin);
   const player = usePlayerStore((s) => s.state);
+  // 进度单独订阅（见 playerStore 的说明）：避免进度事件让整个应用重渲染
+  const progressSecs = usePlayerStore((s) => s.positionSecs);
   const seek = usePlayerStore((s) => s.seek);
   const settingsValues = useSettingsStore((s) => s.values);
-  const lowPower = settingsValues["lowPower"] === "on";
-  // 主题：只有低功耗模式才可能变浅色；默认（非低功耗）永远是深色，与 Salt 的规则一致
-  const systemDark = useSystemDark();
-  const light = lowPower && !lpIsDark(parseLpTheme(settingsValues[LP_THEME_KEY]), systemDark);
 
   // 歌词字体：固定系统字体，按语言分栈（西文 / 中文 / 日文 / 韩文），每行按脚本引用。
   // 行上 var(--lf-<slot>) → 该语言的系统字体链（规则见 src/lib/lyricFont.ts）。
@@ -148,7 +145,7 @@ export function LyricsPage() {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const hideTimer = useRef<number | null>(null);
 
-  const position = current?.positionSecs ?? 0;
+  const position = progressSecs;
 
   // 歌词加载：曲目变化时重新读取
   useEffect(() => {
@@ -191,11 +188,10 @@ export function LyricsPage() {
     }
     if (prevTrackRef.current === id) return;
     prevTrackRef.current = id;
-    if (lowPower) return;
     setSwapping(true);
     const t = window.setTimeout(() => setSwapping(false), 480);
     return () => window.clearTimeout(t);
-  }, [current?.trackId, lowPower]);
+  }, [current?.trackId]);
 
   // 沉浸模式：鼠标/键盘静止 3s 后隐藏上下控件
   useEffect(() => {
@@ -265,19 +261,6 @@ export function LyricsPage() {
     if (!everOpened.current) return;
     setPhase("out");
     setStaged(false);
-    // 低功耗：收起同样不做圆形收缩，改成一次淡出
-    if (lowPower) {
-      const root = pageRef.current;
-      if (root) {
-        root.style.transition = "opacity 150ms ease";
-        root.style.opacity = "0";
-      }
-      const t = window.setTimeout(() => {
-        setPhase(null);
-        setMounted(false);
-      }, 170);
-      return () => window.clearTimeout(t);
-    }
     // 退场：内容先快速淡出，底色与圆盘再收回（都是合成层操作，不重画内容）
     const stage = stageRef.current;
     const disc = discRef.current;
@@ -299,7 +282,7 @@ export function LyricsPage() {
       setMounted(false); // 退场动画播完再卸载
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [open, geo, lowPower]);
+  }, [open, geo]);
 
   // 进场：底色淡入 + 圆盘从点击处绽开 + 内容分层入场（只动 opacity/transform）
   useLayoutEffect(() => {
@@ -313,28 +296,6 @@ export function LyricsPage() {
       root.style.opacity = "";
       root.style.setProperty("--ox", geo.cx + "px");
       root.style.setProperty("--oy", geo.cy + "px");
-    }
-    // 低功耗：只淡根元素（底色 + 内容一起淡，不会先露出半块遮罩）
-    if (lowPower) {
-      if (disc) {
-        disc.style.transition = "none";
-        disc.style.setProperty("--disc-scale", "0");
-      }
-      if (veil) {
-        veil.style.transition = "none";
-        veil.style.opacity = "1";
-      }
-      if (stage) {
-        stage.style.transition = "";
-        stage.style.opacity = "";
-      }
-      if (root) {
-        root.style.transition = "opacity 200ms ease";
-        root.style.opacity = "0";
-        void root.offsetWidth; // 强制重排，让下面的 opacity 走过渡
-        root.style.opacity = "1";
-      }
-      return;
     }
     if (veil) {
       veil.style.transition = "none";
@@ -361,7 +322,7 @@ export function LyricsPage() {
       void stage.offsetWidth;
       stage.style.opacity = "1";
     }
-  }, [mounted, open, geo, lowPower]);
+  }, [mounted, open, geo]);
 
   // 同一时间戳的行归为一组（英文歌常见：原文一行 + 翻译一行共用时间戳）
   const groups = useMemo(() => {
@@ -429,18 +390,6 @@ export function LyricsPage() {
         return;
       }
       const a = anchorRef.current;
-      // 低功耗 + 静止：整段一个样式都不写 —— 没有样式变更就不会产生新帧
-      if (
-        lowPower &&
-        !a.playing &&
-        wheelReturnRef.current === null &&
-        Math.abs(baseYRef.current - yRef.current) <= 0.5 &&
-        Math.abs(vRef.current) < 6
-      ) {
-        lastFrameRef.current = 0;
-        raf = requestAnimationFrame(loop);
-        return;
-      }
       const ms = (a.playing ? a.secs + (ts - a.at) / 1000 : a.secs) * 1000;
       let g = -1;
       for (let i = 0; i < groups.length; i++) {
@@ -485,7 +434,7 @@ export function LyricsPage() {
       // 逐句扫过（规范 I.3 的 gradientPercentage）：只给当前这一组的原文行写一个
       // --sl-k 变量，CSS 用 background-clip:text 把它变成"已唱 / 未唱"的界线。
       // 不 setState、不重建 DOM —— 每帧只是一条 style.setProperty。
-      if (!lowPower && karaokeRef.current) {
+      if (karaokeRef.current) {
         const el = karaokeRef.current;
         if (el.group !== g) {
           if (el.node) el.node.style.removeProperty("--sl-k");
@@ -525,7 +474,7 @@ export function LyricsPage() {
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [open, lyrics, groups, lowPower]);
+  }, [open, lyrics, groups]);
 
   // 居中基准：把「当前这一组」的中心对到歌词区的垂直中心。
   // 歌词区的下边界就是播放条上沿（见 lyrics.css 的 .sl-lyrics-area），所以这里不再补偿偏移量。
@@ -591,15 +540,14 @@ export function LyricsPage() {
   }, [open, lyrics]);
 
   /**
-   * 阶梯模糊：0 / 1.7 / 3.3 / 4.9 / 6.2。滚轮手动浏览或低功耗时整体关掉。
+   * 阶梯模糊：0 / 1.7 / 3.3 / 4.9 / 6.2。滚轮手动浏览时整体关掉。
    * focus 是"视觉焦点句"：正常就是当前句，但在**前奏期间**（activeGroup 还是 -1，
    * 第一句还没到）取第 0 句 —— 否则整首歌开头几十秒里所有行都不模糊、全部 alpha 1，
    * 看上去就像"模糊没加载出来"（Deep End 那种长前奏最明显）。
    */
   const blurFor = useCallback(
     (groupIndex: number, focus: number) => {
-      // 低功耗：逐行 filter blur 会产生几十个滤镜表面，直接关掉
-      if (blurOff || lowPower || focus < 0) return 0;
+      if (blurOff || focus < 0) return 0;
       const d = Math.abs(groupIndex - focus);
       if (d === 0) return 0;
       // 每个带 filter 的行都是一个独立滤镜表面，长歌词动辄上百行。
@@ -607,7 +555,7 @@ export function LyricsPage() {
       if (d > BLUR_LIMIT) return 0;
       return BLUR_STEPS[Math.min(BLUR_STEPS.length - 1, d - 1)];
     },
-    [blurOff, lowPower]
+    [blurOff]
   );
 
   /**
@@ -655,15 +603,13 @@ export function LyricsPage() {
    * 主界面既然看不见，就不该参与合成。
    * ⚠️ 时序是关键：必须"展开完成后才隐藏、退场一开始就恢复"，否则合成器会丢掉主界面的
    *    绘制结果，重新可见时要重画一帧 = 返回时闪一下。
-   * 低功耗模式不做：那时主界面本来就静止，成本≈0，不值得冒重绘风险。
    */
   useLayoutEffect(() => {
-    if (lowPower) return;
     const shell = document.querySelector(".app-shell");
     if (!shell) return;
     if (mounted && open && !phase) shell.classList.add("lyrics-covered");
     return () => shell.classList.remove("lyrics-covered");
-  }, [mounted, open, phase, lowPower]);
+  }, [mounted, open, phase]);
 
   if (!mounted) return null;
 
@@ -674,8 +620,7 @@ export function LyricsPage() {
         (staged ? " staged" : "") +
         (phase === "in" ? " entering" : phase === "out" ? " leaving" : "") +
         (cleared ? " cleared" : "") +
-        (light ? " is-light" : " is-dark") +
-        (lowPower ? " is-flat" : "") +
+        " is-dark" +
         (swapping ? " swapping" : "")
       }
       ref={pageRef}
@@ -701,8 +646,8 @@ export function LyricsPage() {
       <div className="sl-disc" ref={discRef} aria-hidden="true" />
 
       <div className={"sl-stage" + (immersive ? " is-immersive" : "")} ref={stageRef}>
-        {/* 背景三层里的第二层：流光。低功耗不做（那时整页是纯色底） */}
-        {!lowPower && <FlowingLight texture={look.texture} base={look.avgCss} />}
+        {/* 背景三层里的第二层：流光 */}
+        <FlowingLight texture={look.texture} base={look.avgCss} />
 
         <header className="sl-topbar">
           <div className="sl-back">
@@ -769,9 +714,7 @@ export function LyricsPage() {
                       className={
                         "sl-g" +
                         (gi === activeGroup ? " is-active" : "") +
-                        (!lowPower && focus >= 0 && Math.abs(gi - focus) <= 2
-                          ? " is-near"
-                          : "")
+                        (focus >= 0 && Math.abs(gi - focus) <= 2 ? " is-near" : "")
                       }
                       style={{
                         // 不加 opacity 过渡：几十行同时起过渡会把每一行都提成独立合成层

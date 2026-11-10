@@ -21,6 +21,8 @@ import type { PlayMode, QueueItem } from "../api/types";
 export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" } = {}) {
   const inLyrics = variant === "lyrics";
   const player = usePlayerStore((s) => s.state);
+  // 进度单独订阅：它每 ~800ms 变一次，混进 state 会让整条播放栏以外的组件跟着重渲染
+  const progressSecs = usePlayerStore((s) => s.positionSecs);
   const toggle = usePlayerStore((s) => s.toggle);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
@@ -64,7 +66,7 @@ export function PlayerBar({ variant = "shell" }: { variant?: "shell" | "lyrics" 
   }, [current, toggleFavorite]);
 
   // 进度：播放中显示真实位置；拖动时显示拖动位置
-  const position = dragPos ?? current?.positionSecs ?? 0;
+  const position = dragPos ?? progressSecs;
   const percent = duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
 
   // 进度条的指针处理搬进了 WaveProgress：它自己算 0..1 的比例，
