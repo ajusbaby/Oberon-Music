@@ -5,6 +5,7 @@ import * as api from "../api/ipc";
 import { playerEvents } from "../api/events";
 import { useSelectionStore } from "./selectionStore";
 import { toast } from "./uiStore";
+import { noteProgress, recordPlay } from "../lib/listenLog";
 import type { PlayMode, PlayerState, PlayerStatus } from "../api/types";
 
 /**
@@ -20,6 +21,8 @@ function countPlayIfNew(id: number | null, status: PlayerStatus) {
   if (id === null || status !== "playing" || id === lastCountedTrackId) return;
   lastCountedTrackId = id;
   void api.trackPlayed(id);
+  // 同时记一笔本机收听账（统计页的日 / 周 / 月 / 年全靠它）
+  recordPlay(id);
 }
 
 interface PlayerStoreState {
@@ -173,6 +176,8 @@ export async function initPlayerEvents() {
       usePlayerStore.setState({
         state: { ...s, current: { ...s.current, positionSecs: payload.positionSecs } },
       });
+      // 只有真的在播才累计收听秒数：进度事件约每 800ms 一次，差值即播过去的时长
+      if (s.status === "playing") noteProgress(payload.trackId, payload.positionSecs);
     }
   });
 }

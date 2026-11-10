@@ -10,6 +10,8 @@ export type ViewName =
   | "album"
   | "artist"
   | "playlist"
+  /** 统计页：本机收听时长 / 播放次数（日 / 周 / 月 / 年） */
+  | "stats"
   | "settings";
 
 export interface NavTarget {
@@ -55,5 +57,6 @@ export const nav = {
   album: (id: number) => useNavStore.getState().go({ name: "album", id }),
   artist: (name: string) => useNavStore.getState().go({ name: "artist", key: name }),
   playlist: (id: number) => useNavStore.getState().go({ name: "playlist", id }),
+  stats: () => useNavStore.getState().go({ name: "stats" }),
   settings: () => useNavStore.getState().go({ name: "settings" }),
 };

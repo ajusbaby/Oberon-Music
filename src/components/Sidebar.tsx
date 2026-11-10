@@ -1,6 +1,7 @@
 // 侧边栏：Logo / 主导航 / 播放列表 / 设置入口（结构与设计稿一致）
 import { useEffect } from "react";
 import { Icon } from "./Icon";
+import { SidebarStats } from "./SidebarStats";
 import { useNavStore, nav } from "../stores/navStore";
 import { useUiStore } from "../stores/uiStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -132,6 +133,8 @@ export function Sidebar() {
       </div>
 
       <div className="sidebar-bottom">
+        {/* 统计入口：与设置按钮同款，压在它上面 */}
+        <SidebarStats />
         <button
           className={"settings-btn" + (view.name === "settings" ? " active" : "")}
           onClick={() => nav.settings()}

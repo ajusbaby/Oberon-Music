@@ -4,6 +4,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import "./index.css";
 import "./styles/design.css";
 import "./styles/views.css";
+import "./styles/stats.css";
 import "./styles/lyrics.css";
 import "./styles/splash.css";
 

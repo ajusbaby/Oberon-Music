@@ -38,7 +38,9 @@ export type IconName =
   | "refresh"
   | "check"
   | "speaker"
-  | "sort";
+  | "sort"
+  | "chart"
+  | "clock";
 
 // 侧栏导航三枚（home / search / library）为**有意偏离设计稿**：设计稿沿用的是 2014 版
 // Material 实心图标（大色块、直角、无细节留白），与本应用的细描边家族（repeat/shuffle/音量）
@@ -130,6 +132,10 @@ const PATHS: Record<IconName, string> = {
     "M5.2 3h13.6A2.2 2.2 0 0 1 21 5.2v13.6a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 18.8V5.2A2.2 2.2 0 0 1 5.2 3zM9 7.5h6M12 11.2a3.05 3.05 0 1 0 0 6.1 3.05 3.05 0 0 0 0-6.1z",
   // 音乐库「排序方式」：三条递减横线（Material 的 sort），与 plus / more / trash 同属实心族
   sort: "M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z",
+  // 统计：一条基线上三根圆头柱（6.8 / 11.6 / 4.8 单位高），与线框家族同一套 1.9 圆头语言
+  chart: "M4 20.2h16M7.4 20.2V13.4M12 20.2V8.6M16.6 20.2V15.4",
+  // 收听时长：整圆表盘 + 指向 12 点过一点的指针，指针末端用圆头收口
+  clock: "M12 3.6a8.4 8.4 0 1 0 0 16.8 8.4 8.4 0 0 0 0-16.8M12 7.6V12l3.2 1.9",
 };
 
 /** 播放类图标：填充 + 同色描边把直角变成圆角（与磨砂玻璃圆角播放条配套） */
@@ -159,6 +165,8 @@ const STROKE_STYLE: Partial<Record<IconName, CSSProperties>> = {
   "volume-low": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
   "volume-muted": { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
   speaker: { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round", strokeLinejoin: "round" },
+  chart: { fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" },
+  clock: { fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" },
 };
 
 interface IconProps {

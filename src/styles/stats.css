@@ -1,0 +1,418 @@
+/* 统计页：区间切换 + 大字总时长 + 无纵轴柱状图 + 两项指标 + 歌曲明细。
+   动画只用 transform / opacity，且全部在低功耗、失焦、最小化和 reduced-motion 下关闭。 */
+
+.stats-view {
+  --stats-bar-radius: 16px;
+  --stats-bar-ink: #111113;
+  --stats-panel-bg: var(--color-surface);
+}
+
+.stats-view .list-viewport {
+  padding-bottom: 8px;
+}
+
+/* ---------- 区间切换 ---------- */
+
+.stats-seg {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--color-surface-secondary);
+  gap: 2px;
+}
+
+.stats-seg-btn {
+  height: 32px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ob-text-secondary);
+  font-size: 13.5px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.stats-seg-btn:hover {
+  color: var(--ob-text-primary);
+}
+
+.stats-seg-btn.active {
+  background: var(--color-text-primary);
+  color: #fff;
+}
+
+.stats-seg-btn:focus-visible {
+  outline: 2px solid var(--ob-focus);
+  outline-offset: 2px;
+}
+
+/* ---------- 卡片 ---------- */
+
+.stats-card {
+  padding: 26px 28px 22px;
+  border-radius: var(--radius-lg);
+  background: var(--stats-panel-bg);
+  border: 1px solid var(--ob-border-subtle);
+  box-shadow: var(--shadow-card);
+}
+
+.stats-range {
+  font-size: 13px;
+  color: var(--ob-text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.stats-hero {
+  margin: 6px 0 20px;
+}
+
+.stats-hero-num {
+  display: block;
+  font-size: 40px;
+  line-height: 1.14;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  color: var(--ob-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 柱状图 ---------- */
+
+.stats-chart {
+  display: flex;
+  flex-direction: column;
+}
+
+.stats-chart-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 20px;
+  margin-bottom: 10px;
+}
+
+.stats-chart-readout {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ob-text-secondary);
+}
+
+.stats-chart-readout-hint {
+  color: var(--ob-text-tertiary);
+}
+
+.stats-chart-readout-title {
+  color: var(--ob-text-primary);
+  font-weight: 550;
+}
+
+.stats-chart-readout-item {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-chart-peak {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  color: var(--ob-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-bars {
+  position: relative;
+  display: grid;
+  align-items: end;
+  gap: 6px;
+  height: 190px;
+  border-bottom: 1px solid var(--ob-border-default);
+}
+
+.stats-bar {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.stats-bar-fill {
+  display: block;
+  width: calc(100% - 4px);
+  max-width: 64px;
+  margin: 0 auto;
+  height: 100%;
+  transform-origin: bottom;
+  transform: scaleY(var(--v, 0));
+  border-radius: var(--stats-bar-radius) var(--stats-bar-radius) 0 0;
+  background: var(--stats-bar-ink);
+  animation: stats-bar-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(var(--i, 0) * 16ms);
+}
+
+.stats-bar.is-empty .stats-bar-fill {
+  opacity: 0.16;
+  border-radius: 3px;
+}
+
+.stats-bar:hover .stats-bar-fill,
+.stats-bar.on .stats-bar-fill {
+  box-shadow: 0 0 0 2px var(--stats-panel-bg), 0 0 0 3px var(--ob-border-default);
+}
+
+.stats-bar:focus-visible {
+  outline: 2px solid var(--ob-focus);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.stats-xaxis {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.stats-xaxis-tick {
+  font-size: 11.5px;
+  text-align: center;
+  color: var(--ob-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- 两项指标 ---------- */
+
+.stats-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--ob-border-subtle);
+}
+
+.stats-metric + .stats-metric {
+  padding-left: 24px;
+  border-left: 1px solid var(--ob-border-subtle);
+}
+
+.stats-metric-label {
+  font-size: 13px;
+  color: var(--ob-text-secondary);
+}
+
+.stats-metric-value {
+  margin-top: 4px;
+  font-size: 26px;
+  font-weight: 620;
+  letter-spacing: -0.01em;
+  color: var(--ob-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 歌曲明细 ---------- */
+
+.stats-songs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin: 26px 0 6px;
+}
+
+.stats-songs-title {
+  font-size: 15px;
+  font-weight: 620;
+  color: var(--ob-text-primary);
+}
+
+.stats-songs-count {
+  font-size: 12.5px;
+  color: var(--ob-text-tertiary);
+}
+
+.stats-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.stats-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 10px;
+  margin: 0 -10px;
+  border-radius: var(--radius-md);
+  animation: stats-rise 320ms ease-out both;
+  animation-delay: calc(var(--i, 0) * 26ms);
+}
+
+.stats-row:hover {
+  background: var(--ob-surface-muted);
+}
+
+.stats-row-cover {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.86);
+}
+
+.stats-row-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stats-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.stats-row-title {
+  font-size: 14.5px;
+  font-weight: 550;
+  color: var(--ob-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-row-sub {
+  font-size: 12.5px;
+  color: var(--ob-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-row-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.stats-row-duration {
+  font-size: 13.5px;
+  color: var(--ob-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-row-plays {
+  font-size: 11.5px;
+  color: var(--ob-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-more {
+  align-self: stretch;
+  height: 36px;
+  margin-top: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-secondary);
+  color: var(--ob-text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.stats-more:hover {
+  background: var(--color-hover);
+  color: var(--ob-text-primary);
+}
+
+/* ---------- 空态与脚注 ---------- */
+
+.stats-empty {
+  margin-top: 24px;
+  padding: 34px 0 26px;
+  text-align: center;
+}
+
+.stats-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ob-text-primary);
+}
+
+.stats-empty-desc {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--ob-text-tertiary);
+}
+
+.stats-footnote {
+  margin: 16px 2px 4px;
+  font-size: 12px;
+  color: var(--ob-text-tertiary);
+}
+
+/* ---------- 侧栏入口 ---------- */
+
+.side-stats {
+  margin-bottom: 2px;
+}
+
+/* ---------- 动效 ---------- */
+
+@keyframes stats-bar-in {
+  from {
+    transform: scaleY(0);
+  }
+}
+
+@keyframes stats-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.app-shell.low-power .stats-bar-fill,
+.app-shell.low-power .stats-row {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stats-bar-fill,
+  .stats-row {
+    animation: none;
+  }
+}
+
+/* ---------- 夜间 ---------- */
+
+.app-shell.theme-dark .stats-view {
+  --stats-bar-ink: #f4f4f6;
+}
+
+.app-shell.theme-dark .stats-bar.is-empty .stats-bar-fill {
+  opacity: 0.2;
+}
+
+.app-shell.theme-dark .stats-seg-btn.active {
+  background: var(--ob-text-primary);
+  color: #14141a;
+}

@@ -19,6 +19,7 @@ import { ArtistView } from "./views/ArtistView";
 import { PlaylistView } from "./views/PlaylistView";
 import { AlbumsView } from "./views/AlbumsView";
 import { SettingsView } from "./views/SettingsView";
+import { StatsView } from "./views/StatsView";
 import { useNavStore } from "./stores/navStore";
 import { useUiStore, toast } from "./stores/uiStore";
 import { useLibraryStore, initLibraryEvents } from "./stores/libraryStore";
@@ -107,6 +108,8 @@ function CurrentView() {
       return <ArtistView />;
     case "playlist":
       return <PlaylistView />;
+    case "stats":
+      return <StatsView />;
     case "settings":
       return <SettingsView />;
     default:
