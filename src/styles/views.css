@@ -587,18 +587,44 @@
     background: rgba(255, 255, 255, 0.85);
 }
 
-.artist-avatar {
+/* 艺术家头像：全库统一占位图（src\assets\artist-placeholder.jpg），不再按名字取首字母，
+   也不按性别区分。原图是浅蓝底圆形人像，导出时已裁到圆的包围盒，所以 50% 圆角 +
+   cover 正好贴边：四角被裁掉，不会露出白边。 */
+:root {
+    --artist-photo: url("../assets/artist-placeholder.jpg");
+}
+
+.artist-photo {
+    display: block;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background-color: #eef1f8;
+    background-image: var(--artist-photo);
+    background-size: cover;
+    /* 人物头部在圆里略偏上，42% 让脸在卡片里居中而不是贴顶 */
+    background-position: 50% 42%;
+    background-repeat: no-repeat;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* 搜索浮层：和封面同尺寸，但不带投影（那一行本身已经有描边） */
+.artist-photo-sm {
+    width: 36px;
+    height: 36px;
+    box-shadow: none;
+}
+
+/* 音乐库艺术家列表 */
+.artist-photo-md {
     width: 44px;
     height: 44px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 17px;
-    font-weight: 600;
-    color: #fff;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+}
+
+/* 艺术家详情页 */
+.artist-photo-lg,
+.detail-cover.artist-cover {
+    width: 156px;
+    height: 156px;
 }
 
 .artist-name {
@@ -1044,9 +1070,14 @@
     text-decoration: underline;
 }
 
+/* 艺术家详情页的大头像：占位图 + 正圆裁切（专辑封面仍是圆角方，这里只有艺术家） */
 .artist-cover {
-    font-size: 52px;
-    font-weight: 600;
+    border-radius: 50%;
+    background-image: var(--artist-photo);
+    background-size: cover;
+    background-position: 50% 42%;
+    background-repeat: no-repeat;
+    background-color: #eef1f8;
 }
 
 .album-chip-row {
@@ -2102,16 +2133,15 @@
     background-size: 120px 120px, auto;
     background-repeat: repeat, no-repeat;
     background-blend-mode: overlay, normal;
-    /* 窗口不做描边：1px 的轮廓在非整数缩放下（794.4 CSS 高 → 993 个设备像素）
-       底边会被最后那个不完整设备像素吃掉大半，四条边永远做不到一样细，
-       而加粗补底边又会让底边显成 2px。窗口本身有 30px 的投影过渡到桌面，
-       边界已经清楚，所以轮廓整条关掉。线宽变量保留给各处圆角内缩计算用。 */
-    --shell-border-width: 0px;
-    --shell-edge: transparent;
+    /* 窗口描边：曾因"非整数缩放下底边被吃掉半条"整条关掉（794.4 CSS 高 → 993 设备像素）。
+       现在恢复成 1px 发丝，底边的半像素亏损在 ::before 的 box-shadow 里单独补了一层
+       （见文件末尾「窗口边界」一节），四条边实测浓度一致。线宽变量同时参与各处圆角内缩计算。 */
+    --shell-border-width: 1px;
+    --shell-edge: rgba(17, 17, 19, 0.14);
     /* 内侧高光原来是给 2px 灰线垫的，用来拉平「灰线压白底 / 压灰底」的浓淡差。
        1px 纯黑对比度足够，再垫一条亮线会被读成 2px 双线框，所以这里直接关掉（保留变量名，
        将来要恢复只需给它一个颜色）。 */
-    --shell-inner-glow: transparent;
+    --shell-inner-glow: rgba(17, 17, 19, 0.05);
     border: 0;
     box-shadow:
         0 12px 30px -24px rgba(0, 0, 0, 0.42),
@@ -2140,7 +2170,11 @@
     border-radius: var(--app-radius);
     box-shadow:
         inset 0 0 0 var(--shell-border-width, 2px) var(--shell-edge, #d5d8de),
-        inset 0 0 0 calc(var(--shell-border-width, 2px) + 1px) var(--shell-inner-glow, rgba(255, 255, 255, 0.55));
+        inset 0 0 0 calc(var(--shell-border-width, 2px) + 1px) var(--shell-inner-glow, rgba(255, 255, 255, 0.55)),
+        /* 底边补偿：外壳底边正好压在小数设备像素上（125% 缩放下 794.4 CSS px），
+           1px 的环被抗锯齿摊薄到只剩一半浓度，四条边看起来"上面深、下面浅"。
+           这里单独补一条 1px 的纯底边把浓度拉平（数值按 125% 实测标定）。 */
+        inset 0 -2px 0 rgba(17, 17, 19, 0.10);
     pointer-events: none;
     z-index: 120;
 }
@@ -2849,6 +2883,30 @@
     .search-panel-input {
         font-size: 15px;
     }
+}
+
+/* ===== 窗口边界：只留一条发丝边框（2026-11，A 方案 · 去影版）=====
+   外壳铺满整个窗口，边框直接落在外框上：1px 中性发丝（.app-shell::before 的 inset 环）
+   + 向内 1px 的极淡过渡层。没有任何外投影，窗口外框与 tauri.conf 一致（1064×794），
+   内容一像素都不缩——所以也不再需要 --win-gutter 那套留白。
+
+   为什么不留白：投影要落在外壳外面才看得见，而外壳是 clip-path 裁过的整窗矩形，
+   只能让 #root 四周让出透明边距、把投影画在留白里。只要线不要影时，留白就是白让 16px，
+   卡片反而离窗口边更远，四条边看起来更散。
+
+   底线为什么要单独补一层：外壳高度是 794.4 CSS px（窗口 993 设备像素 ÷ 125% 缩放），
+   底边正好落在小数设备像素上，1px 的 inset 环在那一行被抗锯齿摊薄成一半浓度，
+   实测 205/198/192/229（左/上/右/底）——所以 .app-shell::before 的 box-shadow 里补了一条
+   inset 0 -2px 0 的纯底边，把底边拉回到 208，四条边浓度对齐（换缩放比例后需要重测）。
+
+   调参口（变量在 .app-shell 处）：
+     --shell-border-width  线宽，设 0 = 关闭边框（回到贴纸状态）
+     --shell-edge          线色，浅底用深色，深底用浅色
+   */
+
+/* 最大化 / 全屏：窗口贴住屏幕边，屏幕本身已经是边界，线留着只剩半个像素可见 */
+.app-shell.maximized::before {
+    box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

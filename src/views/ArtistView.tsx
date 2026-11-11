@@ -57,12 +57,8 @@ export function ArtistView() {
   return (
     <div className="view-root">
       <div className="detail-header">
-        <div
-          className="detail-cover artist-cover"
-          style={{ background: "linear-gradient(135deg, #2F4858, #5C8A9E)" }}
-        >
-          {(artistName || "?").slice(0, 1).toUpperCase()}
-        </div>
+        {/* 艺术家详情页的封面同样用统一占位图（.artist-cover 里已经给了圆形裁切） */}
+        <div className="detail-cover artist-cover" aria-hidden="true" />
         <div className="detail-info">
           <div className="detail-kicker">Artist</div>
           <div className="detail-title" title={artistName}>

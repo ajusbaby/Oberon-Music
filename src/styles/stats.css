@@ -151,18 +151,29 @@
   width: calc(100% - 4px);
   max-width: 64px;
   margin: 0 auto;
-  height: 100%;
-  transform-origin: bottom;
-  transform: scaleY(var(--v, 0));
-  border-radius: var(--stats-bar-radius) var(--stats-bar-radius) 0 0;
+  /* 高度直接由 --v 决定，而不是 transform: scaleY —— 见 StatsChart.tsx 顶部注释：
+     scaleY 会把圆角一起压扁，柱子一矮顶部就变成直角。 */
+  height: calc(var(--v, 0) * 100%);
+  /* 圆角半径不能超过柱高的一半：短柱（正在播放、只听了十几秒）本来会被比例收缩成
+     斜面，这里让它收成一个小圆头，看起来才像是同一根柱子的下半截。 */
+  border-radius: min(var(--stats-bar-radius), 50%) min(var(--stats-bar-radius), 50%) 0 0;
   background: var(--stats-bar-ink);
-  animation: stats-bar-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  animation-delay: calc(var(--i, 0) * 16ms);
+  transition: height 360ms cubic-bezier(0.22, 1, 0.36, 1);
+  /* 入场只播一次：height 从 0 长到规则值，延迟用于柱子依次起跳。
+     后续更新（正在播放时每秒刷新）走上面的 transition，不再排队延迟。 */
+  animation: stats-bar-rise 500ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 14ms);
 }
 
+/* 没有记录的桶：留一枚短刻度当基线，图表不会在"零"的位置塌成空白。
+   特意不跟柱同宽 —— 同宽的半透明灰条在 12 个月那种稀疏数据里会变成一排
+   "幽灵柱子"，比真柱还抢眼；短刻度读起来才是刻度尺。 */
 .stats-bar.is-empty .stats-bar-fill {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
   opacity: 0.16;
-  border-radius: 3px;
+  animation: none;
 }
 
 .stats-bar:hover .stats-bar-fill,
@@ -410,9 +421,9 @@
 
 /* ---------- 动效 ---------- */
 
-@keyframes stats-bar-in {
+@keyframes stats-bar-rise {
   from {
-    transform: scaleY(0);
+    height: 0;
   }
 }
 
@@ -427,5 +438,6 @@
   .stats-bar-fill,
   .stats-row {
     animation: none;
+    transition: none;
   }
 }

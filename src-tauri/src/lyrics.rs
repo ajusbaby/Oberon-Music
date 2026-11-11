@@ -181,10 +181,100 @@ pub fn parse_any(text: &str, prefer_ttml: bool) -> (bool, Vec<LyricLine>) {
 
 /// 解析 LRC 文本：识别 [mm:ss.xx] 时间轴（可一行多个），无时间轴则按行平铺。
 /// 行内若出现 <mm:ss.xx> 词级标记，会一并解析成 words。
+/// 一行的主要文字体系。只用于"这一行像不像上一句的翻译"这一个判断，
+/// 与 src/lib/lyricLines.ts 的 scriptClass 保持同一优先级（假名 > 谚文 > 汉字 > 拉丁）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScriptClass {
+    Kana,
+    Hangul,
+    Han,
+    Latin,
+    Other,
+}
+
+fn script_class(text: &str) -> ScriptClass {
+    let (mut kana, mut hangul, mut han, mut latin) = (false, false, false, false);
+    for ch in text.chars() {
+        let c = ch as u32;
+        if (0x3041..=0x3096).contains(&c)
+            || (0x309D..=0x309F).contains(&c)
+            || (0x30A1..=0x30FA).contains(&c)
+            || (0x30FD..=0x30FF).contains(&c)
+            || (0x31F0..=0x31FF).contains(&c)
+            || (0xFF66..=0xFF9D).contains(&c)
+        {
+            kana = true;
+        } else if (0xAC00..=0xD7A3).contains(&c)
+            || (0x1100..=0x11FF).contains(&c)
+            || (0x3130..=0x318F).contains(&c)
+        {
+            hangul = true;
+        } else if (0x3400..=0x4DBF).contains(&c)
+            || (0x4E00..=0x9FFF).contains(&c)
+            || (0xF900..=0xFAFF).contains(&c)
+        {
+            han = true;
+        } else if ch.is_ascii_alphabetic() || (0x00C0..=0x024F).contains(&c) {
+            latin = true;
+        }
+    }
+    if kana {
+        ScriptClass::Kana
+    } else if hangul {
+        ScriptClass::Hangul
+    } else if han {
+        ScriptClass::Han
+    } else if latin {
+        ScriptClass::Latin
+    } else {
+        ScriptClass::Other
+    }
+}
+
+/// 去掉"出品公司 / 混音师 / 录音棚 / 母带工程师"这类后缀，只留条目本身。
+fn credit_key(part: &str) -> &str {
+    let mut s = part.trim();
+    loop {
+        let next = s
+            .trim_end_matches("公司")
+            .trim_end_matches("工程")
+            .trim_end_matches(['人', '师', '棚', '室', '员']);
+        if next == s {
+            return s;
+        }
+        s = next;
+    }
+}
+
+/// "作词 : xxx" / "作曲：xxx" / "编曲: xxx" 这类制作信息行。
+/// 判据只看冒号左边那一小块，而且整块必须是已知的制作条目（"作词/作曲" 这种复合写法拆开逐段判断）。
+fn is_credit_line(text: &str) -> bool {
+    let Some(pos) = text.find([':', '：']) else { return false };
+    let head = text[..pos].trim();
+    if head.is_empty() || head.chars().count() > 12 {
+        return false;
+    }
+    head.split(['/', '、', '&'])
+        .map(credit_key)
+        .filter(|part| !part.is_empty())
+        .all(|part| {
+            matches!(
+                part.to_ascii_uppercase().as_str(),
+                "作词" | "作曲" | "编曲" | "词" | "曲" | "词曲" | "制作" | "监制" | "混音" | "母带"
+                    | "录音" | "和声" | "出品" | "发行" | "统筹" | "企划" | "策划" | "演唱" | "原唱"
+                    | "吉他" | "贝斯" | "鼓" | "键盘" | "弦乐" | "钢琴" | "OP" | "SP" | "LRC" | "歌词"
+                    | "翻译" | "校对" | "上传"
+            )
+        })
+}
+
 pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
     let mut timed: Vec<LyricLine> = Vec::new();
     let mut plain: Vec<LyricLine> = Vec::new();
     let mut offset_ms: i64 = 0;
+    // 上一条歌词在 timed 里的下标（多时间戳的重复副歌会有多个）。
+    // 没有时间戳的行如果能认成它的翻译，就继承这些时间点。
+    let mut pending: Vec<usize> = Vec::new();
 
     for raw in text.lines() {
         let line = raw.trim_end_matches(['\r', '\n']).trim();
@@ -213,17 +303,34 @@ pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
         }
 
         let content = rest.trim();
-        if stamps.is_empty() {
-            if !content.is_empty() {
-                plain.push(LyricLine { time_ms: 0, text: content.to_string(), words: Vec::new() });
-            }
-            continue;
-        }
         if content.is_empty() {
             continue; // 纯时间戳行（间奏）暂不显示
         }
-
+        // 制作信息（作词 / 作曲 / 编曲 / 混音 / 出品公司 …）不是歌词：
+        // 它们会被当成歌词显示出来，还会把整首的语言判定算偏（英文歌被 20 个汉字判成中文）。
+        // 有的文件把它们放在开头，有的放在末尾，所以不按位置判断，只看冒号左边是不是制作条目。
+        if is_credit_line(content) {
+            continue;
+        }
+        if stamps.is_empty() {
+            // 混合型双语歌词：原词带时间戳、翻译整行不带时间戳。
+            // 以前这类翻译无条件进 plain，而有时间轴时 plain 会被整个丢掉 —— 翻译行直接消失。
+            // 现在：紧跟上一句歌词、文字体系又不同 → 当作它的翻译，共用它的时间点。
+            if let Some(&at) = pending.first() {
+                if timed[at].words.is_empty() && script_class(&timed[at].text) != script_class(content) {
+                    let times: Vec<i64> = pending.iter().map(|&k| timed[k].time_ms).collect();
+                    for time_ms in times {
+                        timed.push(LyricLine { time_ms, text: content.to_string(), words: Vec::new() });
+                    }
+                    pending.clear(); // 一句歌词最多挂一条翻译
+                    continue;
+                }
+            }
+            plain.push(LyricLine { time_ms: 0, text: content.to_string(), words: Vec::new() });
+            continue;
+        }
         let inline = split_inline_words(content);
+        let first_new = timed.len();
         for (i, ms) in stamps.iter().enumerate() {
             let start = ms + offset_ms;
             let mut text = content.to_string();
@@ -236,6 +343,7 @@ pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
             }
             timed.push(LyricLine { time_ms: start, text, words });
         }
+        pending = (first_new..timed.len()).collect();
     }
 
     if timed.is_empty() {
@@ -596,6 +704,70 @@ mod tests {
         assert!(lines[0].words.is_empty());
         assert_eq!(lines[1].time_ms, 12345);
         assert_eq!(lines[2].time_ms, 62000);
+    }
+
+    /// 混合型双语歌词：原词带时间戳、翻译整行不带时间戳。
+    /// 以前翻译行会被整行丢掉（有 timed 时 plain 不返回）。
+    #[test]
+    fn attaches_untimed_translation_to_previous_line() {
+        let text = r#"[00:02.01]어둠 속에 남아 있는 my story
+黑暗里残存的 我的故事
+[00:10.96]짓눌린 왕관의 무게는 so heavy
+被压垮的王冠 如此沉重
+[00:15.83]그 이름 King
+注：这一行是注释
+再一行注释"#;
+        let (synced, lines) = parse_lrc(text);
+        assert!(synced);
+        assert_eq!(lines.len(), 6);
+        // 原词在前、翻译紧随其后，共用同一时间戳（前端按时间戳相等成组）
+        assert_eq!(lines[0].text, "어둠 속에 남아 있는 my story");
+        assert_eq!(lines[0].time_ms, 2010);
+        assert_eq!(lines[1].text, "黑暗里残存的 我的故事");
+        assert_eq!(lines[1].time_ms, 2010);
+        assert_eq!(lines[2].time_ms, 10960);
+        assert_eq!(lines[3].time_ms, 10960);
+        // 一句歌词最多挂一条翻译：第三条无时间戳行没人可挂，保持旧行为（丢掉）
+        assert_eq!(lines[4].text, "그 이름 King");
+        assert_eq!(lines[5].text, "注：这一行是注释");
+        assert_eq!(lines[5].time_ms, 15830);
+    }
+
+    /// 反例：文字体系相同、或上一行是行内逐字歌词时不要硬配。
+    #[test]
+    fn does_not_glue_same_script_or_enhanced_lines() {
+        // 上一行已经是汉字 → 再来一行汉字，分不清谁是翻译
+        let (_, same) = parse_lrc(r#"[00:02.00]第一句歌词
+第二句也是汉字"#);
+        assert_eq!(same.len(), 1);
+        // 行内逐字时间的那一行不挂翻译（词级时间对不上整行时间戳）
+        let (_, worded) = parse_lrc(r#"[00:10.00]<00:10.00>Hello <00:10.80>world
+你好 世界"#);
+        assert_eq!(worded.len(), 1);
+    }
+
+    /// 制作信息不是歌词：有的文件放开头，有的放末尾，都会被剔掉。
+    #[test]
+    fn skips_credit_lines() {
+        let text = r#"[00:00.00]作词 : 张三/李四
+[00:00.40]作曲：王五
+[00:02.00]第一句歌词
+[00:05.00]第二句歌词
+[00:08.00]和声 : 张三
+[00:09.00]混音师 : 时俊峰
+[00:10.00]出品公司 : 某文化有限公司
+[00:11.00]母带工程师 : 某工程师"#;
+        let (synced, lines) = parse_lrc(text);
+        assert!(synced);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text, "第一句歌词");
+        assert_eq!(lines[1].text, "第二句歌词");
+
+        // 正文里带冒号但不是制作条目的行照常保留
+        let (_, keep) = parse_lrc("[00:02.00]爱：无法言说
+[00:06.00]他说：别回头");
+        assert_eq!(keep.len(), 2);
+        assert_eq!(keep[0].text, "爱：无法言说");
     }
 
     #[test]

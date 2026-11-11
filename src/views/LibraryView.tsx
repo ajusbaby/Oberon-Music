@@ -4,6 +4,7 @@ import * as api from "../api/ipc";
 import type { Album, Artist, SortOrder, Track, TrackSort } from "../api/types";
 import { AlbumGrid } from "../components/AlbumGrid";
 import { TrackList } from "../components/TrackList";
+import { ArtistAvatar } from "../components/ArtistAvatar";
 import { Icon } from "../components/Icon";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
@@ -347,12 +348,8 @@ export function LibraryView() {
           ) : (
             artists.map((artist) => (
               <div key={artist.name} className="artist-row" onClick={() => nav.artist(artist.name)}>
-                <div
-                  className="artist-avatar"
-                  style={{ background: "linear-gradient(135deg, #6B4E71, #A98BB0)" }}
-                >
-                  {(artist.name || "?").slice(0, 1).toUpperCase()}
-                </div>
+                {/* 头像不再按名字取首字母：全库统一占位图，男女一致 */}
+                <ArtistAvatar />
                 <div className="artist-name">{artist.name}</div>
                 <div className="artist-count">
                   {artist.trackCount} 首 · {artist.albumCount} 张专辑

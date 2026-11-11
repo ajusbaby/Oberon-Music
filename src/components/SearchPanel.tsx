@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import * as api from "../api/ipc";
 import type { SearchResult } from "../api/types";
+import { ArtistAvatar } from "./ArtistAvatar";
 import { Cover } from "./Cover";
 import { Icon } from "./Icon";
 import { useSearchStore } from "../stores/searchStore";
@@ -37,6 +38,8 @@ interface Hit {
   /** 有封面就传曲目 id，没有就用字符头像 */
   coverId: number | null;
   glyph: string;
+  /** 艺术家结果用统一占位头像（不再现取名字首字母） */
+  photo?: boolean;
   run: () => void;
 }
 
@@ -139,7 +142,8 @@ export function SearchPanel() {
         title: ar.name || "未知艺术家",
         sub: ar.trackCount + " 首 · " + ar.albumCount + " 张专辑",
         coverId: null,
-        glyph: (ar.name || "?").slice(0, 1).toUpperCase(),
+        glyph: "",
+        photo: true,
         run: () => {
           close();
           nav.artist(ar.name);
@@ -294,6 +298,8 @@ export function SearchPanel() {
                   >
                     {hit.coverId != null ? (
                       <Cover className="search-hit-cover" trackId={hit.coverId} seed={hit.coverId} glyph={hit.glyph} />
+                    ) : hit.photo ? (
+                      <ArtistAvatar size="sm" />
                     ) : (
                       <div className="search-hit-glyph" aria-hidden="true">
                         {hit.glyph}

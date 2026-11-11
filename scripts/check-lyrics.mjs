@@ -309,6 +309,32 @@ function parseClock(s) {
   return null;
 }
 
+/** "作词 : xxx" 这类制作信息行 —— 与 Rust 侧 lyrics.rs 的 is_credit_line 同一条规则 */
+const CREDIT_KEYS = new Set([
+  "作词", "作曲", "编曲", "词", "曲", "词曲", "制作", "监制", "混音", "母带", "录音", "和声",
+  "出品", "发行", "统筹", "企划", "策划", "演唱", "原唱", "吉他", "贝斯", "鼓", "键盘", "弦乐",
+  "钢琴", "OP", "SP", "LRC", "歌词", "翻译", "校对", "上传",
+]);
+
+function isCreditLine(text) {
+  const m = /^([^:：]{1,12})[:：]/.exec(text);
+  if (!m) return false;
+  const parts = m[1]
+    .trim()
+    .split(/[/、&]/)
+    .map((part) => {
+      // 去掉"出品公司 / 混音师 / 录音棚 / 母带工程师"这类后缀（与 Rust 侧 credit_key 一致）
+      let key = part.trim();
+      for (;;) {
+        const next = key.replace(/(公司|工程|[人师棚室员])$/, "");
+        if (next === key) return key;
+        key = next;
+      }
+    })
+    .filter(Boolean);
+  return parts.length > 0 && parts.every((part) => CREDIT_KEYS.has(part.toUpperCase()));
+}
+
 function parseLrc(text) {
   const rows = [];
   for (const raw of text.split(/\r?\n/)) {
@@ -324,8 +350,18 @@ function parseLrc(text) {
       s = s.slice(head[0].length).trim();
     }
     if (!s) continue;
-    if (!times.length) rows.push({ t: null, text: s });
-    else for (const t of times) rows.push({ t, text: s });
+    // 制作信息不是歌词（会把英文歌判成中文，也会在歌词页显示署名人）；开头和末尾都有
+    if (isCreditLine(s)) continue;
+    if (!times.length) {
+      // 没有时间戳的一行：如果紧跟在一行歌词后面、而且文字体系不同，它就是那行的翻译
+      //（与 Rust 侧 parse_lrc 同一条规则；否则翻译会在有时间的歌词里被整行丢掉）
+      const prev = rows.length ? rows[rows.length - 1] : null;
+      if (prev && prev.t != null && !prev.isTr && mod.scriptClass(prev.text) !== mod.scriptClass(s)) {
+        rows.push({ t: prev.t, text: s, isTr: true });
+      } else {
+        rows.push({ t: null, text: s });
+      }
+    } else for (const t of times) rows.push({ t, text: s });
   }
   return rows;
 }
@@ -340,26 +376,30 @@ function parseTtml(text) {
   return rows;
 }
 
+/**
+ * 歌词文本 → 文本行 + 显示分组 + 翻译位图。
+ *
+ * 分组规则与播放器（src/lib/lyricLines.ts）、Rust 解析器（src-tauri/src/lyrics.rs）完全一致：
+ *   · 同一时间戳的行成一组
+ *   · 翻译行时间戳更晚的，靠「原词 → 紧跟一行汉字」的结构成组
+ * 体检脚本自己另写一套分组就会跟界面看到的不是同一件事 —— 那正是这次踩的坑。
+ */
 function toLines(text) {
   const rows = isTtmlText(text) ? parseTtml(text) : parseLrc(text);
-  const texts = rows.map((r) => r.text);
-  const groups = [];
-  const byTime = new Map();
-  rows.forEach((r, i) => {
-    if (r.t == null) {
-      groups.push([i]);
-      return;
-    }
-    const key = Math.round(r.t / 10); // 10ms 容差，等价于播放器的"同一时间戳"
-    let g = byTime.get(key);
-    if (!g) {
-      g = [];
-      byTime.set(key, g);
-      groups.push(g);
-    }
-    g.push(i);
-  });
-  return { texts, groups };
+  // 播放器在有时间轴时会丢掉没时间轴的行（除非它是翻译，已在 parseLrc 里继承时间）
+  const timed = rows.filter((r) => r.t != null);
+  const useTimed = timed.length > 0;
+  const finalRows = useTimed ? timed : rows;
+  const lay = mod.layoutLyricLines(
+    finalRows.map((r) => ({ timeMs: r.t ?? 0, text: r.text })),
+    useTimed
+  );
+  return {
+    texts: finalRows.map((r) => r.text),
+    groups: lay.groups,
+    translation: lay.translation,
+    paired: lay.paired,
+  };
 }
 
 // ---------------------------------------------------------------- 曲目来源
@@ -422,6 +462,7 @@ const LV = { error: C("red", "错误"), warn: C("yellow", "警告"), info: C("di
 function report(results) {
   const withLyrics = results.filter((r) => r.report);
   const noLyrics = results.filter((r) => !r.report);
+  const onlyCredits = noLyrics.filter((r) => r.onlyCredits).length;
   const dist = { zhHans: 0, zhHant: 0, ja: 0, ko: 0, latin: 0, symbols: 0, none: 0 };
   for (const r of withLyrics) dist[r.report.songProfile ?? "none"]++;
   const byLevel = { error: [], warn: [], info: [] };
@@ -431,12 +472,20 @@ function report(results) {
   console.log(C("bold", "曲库歌词体检") + C("dim", "  policy=" + policy + "（" + (policy === "accurate" ? "准确优先" : "一致性优先") + "）"));
   console.log(C("dim", "─".repeat(64)));
   console.log(
-    " 曲目 " + results.length + " 首 · 读到歌词 " + withLyrics.length + " 首 · 没有歌词 " + noLyrics.length + " 首"
+    " 曲目 " + results.length + " 首 · 读到歌词 " + withLyrics.length + " 首 · 没有歌词 " + noLyrics.length + " 首" +
+      (onlyCredits ? C("dim", "（其中 " + onlyCredits + " 首只有作词/作曲等制作信息）") : "")
   );
   console.log(
     " 主语言：简中 " + dist.zhHans + " · 繁中 " + dist.zhHant + " · 日文 " + dist.ja + " · 韩文 " + dist.ko +
       " · 西文 " + dist.latin + " · 符号 " + dist.symbols + " · 无 " + dist.none
   );
+  const trSongs = withLyrics.filter((r) => r.report.translationLines > 0);
+  if (trSongs.length) {
+    const trLines = trSongs.reduce((n, r) => n + r.report.translationLines, 0);
+    console.log(
+      C("dim", " 双语歌词 " + trSongs.length + " 首 · 认出翻译 " + trLines + " 行（翻译行不计入语言判定，显示上与原文同块）")
+    );
+  }
 
   const emit = (level, limit) => {
     const list = byLevel[level];
@@ -468,7 +517,8 @@ function report(results) {
     for (const r of withLyrics) {
       const rep = r.report;
       const bar = ["zhHans", "zhHant", "ja", "ko", "latin", "symbols"].map((s) => s + ":" + rep.profiles[s]).join(" ");
-      console.log("  " + (rep.songProfile ?? "-").padEnd(7) + " " + bar.padEnd(52) + " " + r.label);
+      const tr = rep.translationLines ? " 译" + rep.translationLines : "";
+      console.log("  " + (rep.songProfile ?? "-").padEnd(7) + " " + bar + tr + " " + " ".repeat(Math.max(1, 12 - tr.length)) + r.label);
     }
   }
 
@@ -525,14 +575,21 @@ for (const t of tracks) {
     results.push({ ...t, report: null });
     continue;
   }
-  const { texts, groups } = toLines(ly.text);
-  const rep = mod.analyzeLyrics(texts, groups, policy);
-  results.push({ ...t, source: ly.source, report: rep, lines: texts.length });
+  const { texts, groups, translation } = toLines(ly.text);
+  // 整首歌的文字只有制作信息（作词 / 作曲 …）时，过滤后一行不剩 —— 那就是没有歌词，
+  // 不该报"歌词为空"的警告（以前这些行被当成歌词，才显得"有东西"）。
+  if (!texts.length) {
+    results.push({ ...t, report: null, source: ly.source, onlyCredits: true });
+    continue;
+  }
+  const rep = mod.analyzeLyrics(texts, groups, policy, translation);
+  results.push({ ...t, source: ly.source, report: rep, lines: texts.length, translation });
   if (trace && (t.label + " " + t.file).toLowerCase().includes(trace.toLowerCase())) {
     console.log("");
     console.log(C("bold", "=== " + t.label));
     console.log(C("dim", "    " + t.file + "  来源 " + ly.source));
-    for (let i = 0; i < texts.length; i++) console.log("  " + rep.lineProfiles[i].padEnd(7) + texts[i]);
+    for (let i = 0; i < texts.length; i++)
+      console.log("  " + rep.lineProfiles[i].padEnd(7) + (translation[i] ? "译 " : "   ") + texts[i]);
   }
 }
 

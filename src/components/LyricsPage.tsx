@@ -52,6 +52,7 @@ import {
   splitLineRuns,
 } from "../lib/lyricFont";
 import type { FontProfileId, LineRun } from "../lib/lyricFont";
+import { layoutLyricLines } from "../lib/lyricLines";
 import { ensureFontsRegistered, useFontStore } from "../stores/fontStore";
 import { useUiStore, toast } from "../stores/uiStore";
 
@@ -368,17 +369,21 @@ export function LyricsPage() {
     }
   }, [mounted, open, geo]);
 
-  // 同一时间戳的行归为一组（英文歌常见：原文一行 + 翻译一行共用时间戳）
-  const groups = useMemo(() => {
-    const out: number[][] = [];
-    const lines = lyrics?.lines ?? [];
-    for (let i = 0; i < lines.length; i++) {
-      const last = out[out.length - 1];
-      if (last && lines[last[0]].timeMs === lines[i].timeMs) last.push(i);
-      else out.push([i]);
-    }
-    return out;
-  }, [lyrics]);
+  // 一条歌词可能不止一行文字 —— 原文 + 翻译。两种写法都要认：
+  //   ① 共用时间戳（英文歌常见）
+  //   ② 翻译行时间戳更晚（《王的归来（I'm King）》那类：翻译追在原文后面 0.3~12 秒）
+  // 判据在 lib/lyricLines，React 和体检脚本（npm run check:lyrics）用的是同一套。
+  const layout = useMemo(
+    () =>
+      layoutLyricLines(
+        (lyrics?.lines ?? []).map((l) => ({ timeMs: l.timeMs, text: l.text })),
+        !!lyrics?.synced
+      ),
+    [lyrics]
+  );
+  const groups = layout.groups;
+  // 翻译行：渲染小一号，且不参与整首语言判定（翻译的文字体系是译者选的，不是这首歌的语言）
+  const translation = layout.translation;
 
   // 位置锚点：store 每次下发位置时记一笔，rAF 里按流逝时间外推。
   // 进度事件约 800ms 一次，直接用它驱动会出现「上一句还没亮完就换行」。
@@ -652,7 +657,10 @@ export function LyricsPage() {
   const synced = !!lyrics?.synced && hasLyrics;
 
   // 整首歌归属哪个档案：假名 / 谚文是硬证据，简体字与日式汉字是软证据（权重见 lyricFont）
-  const detectedProfile = useMemo(() => detectSongProfile(lines.map((l) => l.text)), [lines]);
+  const detectedProfile = useMemo(
+    () => detectSongProfile(lines.map((l) => l.text), translation),
+    [lines, translation]
+  );
   // 歌曲级语言覆盖（§5.4）：统计判错时用户只改这一首，settings 里按曲目 id 存一条
   const overrides = useMemo(() => readOverrides(settingsValues), [settingsValues]);
   const trackKey = current?.trackId ?? null;
@@ -667,8 +675,8 @@ export function LyricsPage() {
   const matchPolicy = readMatchPolicy(settingsValues);
   // 每一行归属的档案（同组翻译行跟随原词，见 detectLineProfiles）
   const lineProfiles = useMemo(
-    () => detectLineProfiles(lines.map((l) => l.text), songProfile, matchPolicy, groups),
-    [lines, songProfile, matchPolicy, groups]
+    () => detectLineProfiles(lines.map((l) => l.text), songProfile, matchPolicy, groups, translation),
+    [lines, songProfile, matchPolicy, groups, translation]
   );
 
   // 链里出现的导入字体必须真的注册过（document.fonts.add）才会生效。
@@ -860,6 +868,9 @@ export function LyricsPage() {
               <div className="sl-track" ref={trackRef}>
                 {!synced && <p className="sl-note">纯文本歌词 · 无时间轴</p>}
                 {groups.map((group, gi) => {
+                  // 点哪一行都跳到这一条的演唱时刻：翻译行的时间戳是它出现的时间，
+                  // 不是唱到这一句的时间，拿它 seek 会跳过头。
+                  const headMs = lines[group[0]].timeMs;
                   const focus = activeGroup >= 0 ? activeGroup : groups.length > 0 ? 0 : -1;
                   const blur = blurFor(gi, focus);
                   const alpha = alphaFor(gi, focus);
@@ -896,7 +907,7 @@ export function LyricsPage() {
                                 ? () => {
                                     wheelYRef.current = 0;
                                     setBlurOff(false); // 点句跳转 = 结束手动浏览，模糊立刻回来
-                                    void seek(line.timeMs / 1000);
+                                    void seek(headMs / 1000);
                                   }
                                 : undefined
                             }

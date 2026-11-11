@@ -558,10 +558,17 @@ function isHanProfile(id: FontProfileId): boolean {
  * 判断顺序是有意为之：谚文 / 假名这类**专属文字**优先，因为它们是硬证据；
  * 汉字区两国共用，只能靠简体字 vs 日式汉字这类软证据，放在后面。
  */
-export function detectSongProfile(texts: string[]): FontProfileId {
+export function detectSongProfile(
+  texts: string[],
+  /** 不参与统计的行（翻译行）。见 lyricLines.layoutLyricLines —— 翻译不是唱出来的词，
+   *  它的文字体系是译者选的：中韩双语歌词里汉字翻译行会让谚文占比跌破 30% 阈值，
+   *  整首就被判成中文了。 */
+  ignore?: readonly boolean[],
+): FontProfileId {
   let kana = 0, hangul = 0, han = 0, latin = 0, simp = 0, trad = 0, jpKanji = 0;
-  for (const t of texts) {
-    const e = lineEvidence(t);
+  for (let i = 0; i < texts.length; i++) {
+    if (ignore && ignore[i]) continue;
+    const e = lineEvidence(texts[i]);
     kana += e.kana;
     hangul += e.hangul;
     han += e.han;
@@ -650,20 +657,28 @@ function hanLineProfile(
   return "zhHans";
 }
 
-/** 逐行归属；groups 用来做"整组一致"（同一句的翻译行跟原行走） */
+/**
+ * 逐行归属；groups 用来做"整组一致"（同一句的原词行跟原词走）。
+ *
+ * translation 是翻译行位图（来自 layoutLyricLines）：翻译行既不投票也不被统一 ——
+ * 它是另一种文字写的同一句话，用中文写的翻译就该用中文字体；
+ * 跟着韩文行套韩文字体只会让汉字变成字面不匹配的 Hanja 字形。
+ */
 export function detectLineProfiles(
   texts: string[],
   songProfile: FontProfileId | null,
   policy: MatchPolicy = "consistent",
   groups?: number[][],
+  translation?: readonly boolean[],
 ): FontProfileId[] {
   const out = texts.map((t) => detectLineProfile(t, songProfile, policy));
   if (policy !== "accurate" || !groups?.length) return out;
   // 逐行判定时，一组里只要有一行是日文 / 韩文，这组整体跟着走 ——
-  // 同一句的翻译行往往是纯汉字，单看会误判成中文
+  // 同一句被拆成几行写的时候（原文折行），单看其中一行会误判成中文
   for (const group of groups) {
     let groupProfile: FontProfileId | null = null;
     for (const i of group) {
+      if (translation && translation[i]) continue;
       const p = out[i];
       if (p === "ja" || p === "ko") {
         groupProfile = p;
@@ -671,7 +686,10 @@ export function detectLineProfiles(
       }
     }
     if (!groupProfile) continue;
-    for (const i of group) if (out[i] !== groupProfile) out[i] = groupProfile;
+    for (const i of group) {
+      if (translation && translation[i]) continue;
+      if (out[i] !== groupProfile) out[i] = groupProfile;
+    }
   }
   return out;
 }
