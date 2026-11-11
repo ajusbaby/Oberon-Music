@@ -14,6 +14,8 @@ pub struct AppState {
     /// 主数据库连接（WAL；扫描时另开连接读写）
     pub db: Arc<Mutex<Connection>>,
     pub db_path: PathBuf,
+    /// 应用数据目录（听歌统计的 listening.json 就落在这里）
+    pub data_dir: PathBuf,
     /// 封面缓存目录（app_data/cover_cache）
     pub cover_dir: PathBuf,
     /// 用户导入的字体目录（app_data/fonts，内含 index.json 索引）
@@ -130,6 +132,7 @@ impl AppState {
             AppState {
                 db,
                 db_path,
+                data_dir,
                 cover_dir,
                 font_dir,
                 fonts_lock: Arc::new(Mutex::new(())),

@@ -13,6 +13,7 @@ mod models;
 mod scanner;
 mod smtc;
 mod state;
+mod stats;
 mod watcher;
 mod window_fit;
 
@@ -223,6 +224,15 @@ pub fn run() {
             commands::fonts::font_import,
             commands::fonts::font_remove,
             commands::fonts::font_bytes,
+            // 听歌统计（落在 app_data 与「文档」双份，卸载重装也能读回）
+            commands::stats::stats_read,
+            commands::stats::stats_write,
+            commands::stats::stats_merge,
+            commands::stats::stats_info,
+            commands::stats::stats_import_file,
+            commands::stats::stats_export_file,
+            commands::stats::stats_resolve,
+            commands::stats::stats_reveal,
             // 设置
             commands::settings::settings_get,
             commands::settings::settings_set,

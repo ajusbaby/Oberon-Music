@@ -103,6 +103,8 @@ pub struct QueueTrack {
 #[serde(rename_all = "camelCase")]
 pub struct NowPlaying {
     pub track_id: i64,
+    /// 文件路径：前端用它算听歌统计的稳定键（trackKey），曲库重建后仍能对上同一首歌
+    pub path: String,
     pub title: String,
     pub artist: String,
     pub album: String,

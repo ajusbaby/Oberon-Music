@@ -24,6 +24,7 @@ import { usePlayerStore } from "../stores/playerStore";
 import { useUiStore, toast } from "../stores/uiStore";
 import { pickAndAddMusicFolder } from "../lib/addMusic";
 import { LyricFontSettings } from "../components/LyricFontSettings";
+import { StatsBackupBlock } from "../components/StatsBackupBlock";
 import {
   ACTIVE_SCALE_KEY,
   ACTIVE_SCALE_RANGE,
@@ -828,6 +829,7 @@ export function SettingsView() {
               </div>
             </div>
           </div>
+          <StatsBackupBlock />
           <div className="settings-row">
             <div className="settings-row-main">
               <div className="settings-label">已保存的设置项</div>

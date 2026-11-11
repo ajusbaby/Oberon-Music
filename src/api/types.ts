@@ -83,6 +83,8 @@ export interface QueueItem {
 
 export interface NowPlaying {
   trackId: number;
+  /** 文件绝对路径：听歌统计用它算稳定键（重装后 id 会变，路径不会） */
+  path: string;
   title: string;
   artist: string;
   album: string;
@@ -365,4 +367,59 @@ export interface ImportReport {
   imported: FontResource[];
   duplicates: FontResource[];
   failed: ImportFailure[];
+}
+
+// ───────────────────────────── 听歌统计（持久化账本） ─────────────────────────────
+
+/**
+ * stats_read 的返回：json 是当前该用的那份账本原文。
+ * source = "primary" 取应用数据目录；"mirror" 说明主副本丢了或比镜像旧、改用文档目录的镜像。
+ */
+export interface StatsRead {
+  json: string | null;
+  source: "primary" | "mirror" | "none";
+  primary: string;
+  mirror: string | null;
+  updatedMs: number;
+}
+
+/** stats_write 的返回：两个落点、字节数、是否顺手更新了镜像、以及非致命的告警 */
+export interface StatsWriteReport {
+  primary: string;
+  mirror: string | null;
+  bytes: number;
+  mirrorBytes: number;
+  savedMs: number;
+  mirrorWritten: boolean;
+  warning: string | null;
+}
+
+/** 两个副本各自的时间与体积（设置页显示「最近保存」用） */
+export interface StatsInfo {
+  primary: string;
+  mirror: string | null;
+  primaryBytes: number;
+  mirrorBytes: number;
+  savedMs: number;
+  mirrorSavedMs: number;
+}
+
+/** stats_merge 的结果：把多份账（含旧版按自增 id 记的）并成一份 */
+export interface StatsMergeReport {
+  json: string;
+  days: number;
+  tracks: number;
+  /** 旧账里那些已经对不上任何曲目的 id 条数（保留成「曲目 #<id>」） */
+  unresolved: number;
+  updatedMs: number;
+}
+
+/** 账本里的曲目键反查回当前曲库（拿封面、拿到最新标题） */
+export interface ResolvedTrack {
+  key: string;
+  trackId: number;
+  path: string;
+  title: string;
+  artist: string;
+  album: string;
 }

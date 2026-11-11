@@ -6,6 +6,7 @@ pub mod player;
 pub mod playlist;
 pub mod scan;
 pub mod settings;
+pub mod stats;
 
 use crate::error::{AppError, AppResult};
 use rusqlite::Connection;

@@ -1,6 +1,9 @@
 // 统计页：本周 / 本月 / 本年 / 总共 四档，区间大字号总时长 + 柱状图 + 两项指标 + 歌曲明细。
 // 数据全部来自 src/lib/listenLog.ts 的本机日志，前端聚合，不碰后端。
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
+import * as api from "../api/ipc";
+import { toast } from "../stores/uiStore";
 import { AnimatedNumber } from "../components/AnimatedNumber";
 import { StatsChart } from "../components/StatsChart";
 import { StatsTrackList } from "../components/StatsTrackList";
@@ -8,11 +11,14 @@ import {
   SCOPE_LABEL,
   SCOPES,
   fmtDurationLong,
+  restoreStatsFrom,
   summarizeScope,
   trackTotals,
   useListenLog,
   type Scope,
 } from "../lib/listenLog";
+
+const BACKUP_FILTERS = [{ name: "Oberon 听歌统计", extensions: ["json"] }];
 
 const fmtSecs = (n: number) => fmtDurationLong(n);
 const fmtCount = (n: number) => String(Math.round(n));
@@ -25,6 +31,24 @@ export function StatsView() {
   const trackRows = useMemo(() => trackTotals(log, scope), [log, scope]);
 
   const hasData = summary.totalSecs > 0 || summary.totalPlays > 0;
+  const [restoring, setRestoring] = useState(false);
+
+  // 换机器 / 重装之后：把导出的那份并回来（后端按路径哈希合并，不会重复记时）
+  const restore = useCallback(async () => {
+    if (restoring) return;
+    const picked = await open({ multiple: false, directory: false, filters: BACKUP_FILTERS });
+    if (typeof picked !== "string") return;
+    setRestoring(true);
+    try {
+      const text = await api.statsImportFile(picked);
+      const result = await restoreStatsFrom(text);
+      toast("已并入备份：" + result.days + " 天记录、" + result.tracks + " 首歌");
+    } catch (e) {
+      toast("恢复失败：" + String(e), "error");
+    } finally {
+      setRestoring(false);
+    }
+  }, [restoring]);
 
   return (
     <div className="view-root stats-view">
@@ -93,7 +117,20 @@ export function StatsView() {
         </section>
 
         <div className="stats-footnote">
-          记录保存在本机，不上传、不联网；清空应用数据会重新开始记账。
+          记录只在本机，不上传、不联网。每次记录都会同时写进应用数据目录和
+          「文档\Oberon\听歌统计」，卸载重装、换机器之后都能并回来。
+          <span className="stats-footnote-actions">
+            <button type="button" className="stats-footnote-btn" disabled={restoring} onClick={() => void restore()}>
+              {restoring ? "恢复中…" : "从备份恢复"}
+            </button>
+            <button
+              type="button"
+              className="stats-footnote-btn"
+              onClick={() => void api.statsReveal().catch(() => undefined)}
+            >
+              打开备份文件夹
+            </button>
+          </span>
         </div>
       </div>
     </div>

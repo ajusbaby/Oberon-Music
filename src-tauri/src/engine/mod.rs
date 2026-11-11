@@ -1334,6 +1334,7 @@ fn current_item(ctx: &EngineCtx) -> Option<(QueueItem, NowPlaying)> {
     };
     let np = NowPlaying {
         track_id: item.track_id,
+        path: item.path,
         title: item.title,
         artist: item.artist,
         album: item.album,

@@ -25,6 +25,7 @@ import { useUiStore, toast } from "./stores/uiStore";
 import { useLibraryStore, initLibraryEvents } from "./stores/libraryStore";
 import { usePlayerStore, initPlayerEvents } from "./stores/playerStore";
 import { useSettingsStore } from "./stores/settingsStore";
+import { initListenLog } from "./lib/listenLog";
 import { playerEvents } from "./api/events";
 import { setWinFocused, setWinHidden as publishWinHidden } from "./lib/winFocus";
 import { playerPause, playerRestore } from "./api/ipc";
@@ -201,6 +202,8 @@ export default function App() {
     void useLibraryStore.getState().refreshFolders();
     void usePlayerStore.getState().refresh();
 
+    // 先把账本从磁盘并回来（缓存 + 旧账 + 文件三份合并），再开始记账
+    void initListenLog();
     void initPlayerEvents();
     void initLibraryEvents();
     void playerEvents.onError((payload) => {

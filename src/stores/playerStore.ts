@@ -6,7 +6,7 @@ import { playerEvents } from "../api/events";
 import { useSelectionStore } from "./selectionStore";
 import { toast } from "./uiStore";
 import { noteProgress, recordPlay } from "../lib/listenLog";
-import type { PlayMode, PlayerState, PlayerStatus } from "../api/types";
+import type { NowPlaying, PlayMode, PlayerState, PlayerStatus } from "../api/types";
 
 /**
  * 播放计数：曲目**真正开始播放**时才 +1（音乐库「播放次数」排序靠它）。
@@ -17,12 +17,13 @@ import type { PlayMode, PlayerState, PlayerStatus } from "../api/types";
  * 已知取舍：正在播的那首被再点一次（重头再播）不算新的一次播放。
  */
 let lastCountedTrackId: number | null = null;
-function countPlayIfNew(id: number | null, status: PlayerStatus) {
-  if (id === null || status !== "playing" || id === lastCountedTrackId) return;
-  lastCountedTrackId = id;
-  void api.trackPlayed(id);
-  // 同时记一笔本机收听账（统计页的日 / 周 / 月 / 年全靠它）
-  recordPlay(id);
+function countPlayIfNew(current: NowPlaying | null, status: PlayerStatus) {
+  if (!current || status !== "playing" || current.trackId === lastCountedTrackId) return;
+  lastCountedTrackId = current.trackId;
+  void api.trackPlayed(current.trackId);
+  // 同时记一笔本机收听账（统计页的日 / 周 / 月 / 年全靠它）；
+  // 账本按「路径哈希」记账而不是 id —— 重装重扫后 id 会变，路径不会
+  recordPlay(current);
 }
 
 interface PlayerStoreState {
@@ -172,7 +173,7 @@ export async function initPlayerEvents() {
       positionSecs: rest.current?.positionSecs ?? 0,
     });
     // 播放计数（见文件顶部 countPlayIfNew 的说明）
-    countPlayIfNew(rest.current?.trackId ?? null, rest.status);
+    countPlayIfNew(rest.current ?? null, rest.status);
     // 队列发生变化（例如由外部命令或自动切换引起）时重新拉取完整状态
     if (!s || s.queue.length !== queueLen) {
       void usePlayerStore.getState().refresh();
@@ -184,7 +185,7 @@ export async function initPlayerEvents() {
       // 只写这一个数字：订阅 state 的组件（首页 / 曲库 / 侧栏）不会因此重渲染
       usePlayerStore.setState({ positionSecs: payload.positionSecs });
       // 只有真的在播才累计收听秒数：进度事件约每 800ms 一次，差值即播过去的时长
-      if (s.status === "playing") noteProgress(payload.trackId, payload.positionSecs);
+      if (s.status === "playing") noteProgress(s.current, payload.positionSecs);
     }
   });
 }

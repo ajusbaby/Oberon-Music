@@ -6,6 +6,7 @@ import type {
   Album, Artist, AudioDeviceInfo, ExclusiveDeviceCaps, FolderInfo, LibraryStats, Paginated, Playlist,
   PlaylistDetail, PlayerState, PlayMode, QueuePosition, SearchResult, Track, TrackFilter,
   OutputStatus, ExclusiveOutputSettings, FontResource, ImportReport,
+  StatsRead, StatsWriteReport, StatsInfo, StatsMergeReport, ResolvedTrack,
 } from "./types";
 
 export async function scanAddMusicFolder(path: string): Promise<FolderInfo> {
@@ -220,4 +221,45 @@ export async function fontRemove(id: string): Promise<void> {
  */
 export async function fontBytes(id: string): Promise<ArrayBuffer> {
   return invoke("font_bytes", { id });
+}
+
+// ───────────────────────────── 听歌统计（持久化账本） ─────────────────────────────
+
+/**
+ * 读回账本。后端同时看两份（应用数据目录 listening.json / 文档目录镜像），
+ * 取较新的那份；两边都没有时 json 为 null，source 为 "none"。
+ */
+export async function statsRead(): Promise<StatsRead> {
+  return invoke("stats_read");
+}
+/**
+ * 写入账本：主副本每次都写，镜像按节流写（forceMirror = true 时立刻写，例如关窗、手动备份）。
+ * 结构不合法时后端直接报错，调用方据此保留本地那份。
+ */
+export async function statsWrite(json: string, forceMirror?: boolean): Promise<StatsWriteReport> {
+  return invoke("stats_write", { json, forceMirror });
+}
+/** 合并多份账本（当前缓存 + 旧版按 id 记的账 + 文件里的），旧 id 由后端查曲库换成路径键 */
+export async function statsMerge(parts: string[]): Promise<StatsMergeReport> {
+  return invoke("stats_merge", { parts });
+}
+/** 两个副本的路径、字节数与保存时间（设置页展示用） */
+export async function statsInfo(): Promise<StatsInfo> {
+  return invoke("stats_info");
+}
+/** 读用户选中的备份文件（只读、校验后原样返回文本） */
+export async function statsImportFile(path: string): Promise<string> {
+  return invoke("stats_import_file", { path });
+}
+/** 把账本里的曲目键反查回曲库：拿到 trackId（封面）与当前标题 */
+export async function statsResolve(keys: string[]): Promise<ResolvedTrack[]> {
+  return invoke("stats_resolve", { keys });
+}
+/** 把账本导出成文件（用户自己挑路径），返回实际写入的路径 */
+export async function statsExportFile(path: string, json: string): Promise<string> {
+  return invoke("stats_export_file", { path, json });
+}
+/** 在资源管理器里打开备份目录 */
+export async function statsReveal(): Promise<void> {
+  return invoke("stats_reveal");
 }
