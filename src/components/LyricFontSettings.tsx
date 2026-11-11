@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { FontResource } from "../api/types";
 import { Icon } from "./Icon";
+import { Select } from "./Select";
 import { useSettingsStore } from "../stores/settingsStore";
 import { forgetRegistered, ensureFontsRegistered, useFontStore } from "../stores/fontStore";
 import { toast, useUiStore } from "../stores/uiStore";
@@ -22,6 +23,8 @@ import {
   PROFILE_LIST,
   applyPolicy,
   buildStacks,
+  chainOf,
+  fontCovers,
   fontFamilyName,
   forgetFont,
   missingSampleChars,
@@ -56,6 +59,23 @@ function coverageTags(r: FontResource): string[] {
 
 export function LyricFontSettings() {
   const settings = useSettingsStore((s) => s.values);
+  // 预览切段：主字体没有的字改用纯系统链 —— 主字体的 .notdef 常常是零宽度，
+  // 直接让浏览器挑字形时两个缺字会叠在一起，看起来像渲染坏了
+  const previewRuns = useCallback(
+    (text: string, primary: FontResource | null, systemCss: string) => {
+      const out: { text: string; missing: boolean; css?: string }[] = [];
+      if (!primary) return out;
+      for (const ch of Array.from(text)) {
+        const cp = ch.codePointAt(0) ?? 0;
+        const missing = ch.trim() !== "" && !fontCovers(primary, cp);
+        const last = out[out.length - 1];
+        if (last && last.missing === missing) last.text += ch;
+        else out.push({ text: ch, missing, css: missing ? systemCss : undefined });
+      }
+      return out;
+    },
+    [],
+  );
   const setSetting = useSettingsStore((s) => s.set);
   const openDialog = useUiStore((s) => s.openDialog);
 
@@ -82,6 +102,7 @@ export function LyricFontSettings() {
   );
   const usedKey = usedIds.join("|");
   const [, setEpoch] = useState(0);
+
   useEffect(() => {
     if (!usedIds.length) return;
     let alive = true;
@@ -107,10 +128,16 @@ export function LyricFontSettings() {
   );
 
   const setPrimary = (id: FontProfileId, fontId: string) => {
-    void persist({ ...profiles, [id]: { ...profiles[id], primaryFontId: fontId || null } });
+    const prof = profiles[id];
+    const primaryFontId = fontId || null;
+    // 同一个字体同时当主字体和备用字体没有意义，替换主字体时把它从备用链里摘掉
+    const fallbackFontIds = prof.fallbackFontIds.filter((x) => x !== primaryFontId);
+    void persist({ ...profiles, [id]: { ...prof, primaryFontId, fallbackFontIds } });
   };
   const setFallback = (id: FontProfileId, fontId: string) => {
-    void persist({ ...profiles, [id]: { ...profiles[id], fallbackFontIds: fontId ? [fontId] : [] } });
+    const prof = profiles[id];
+    if (fontId && fontId === prof.primaryFontId) return;
+    void persist({ ...profiles, [id]: { ...prof, fallbackFontIds: fontId ? [fontId] : [] } });
   };
 
   /** 导入：选文件 → 后端解析入库 → 只给提示，不动档案配置 */
@@ -189,8 +216,14 @@ export function LyricFontSettings() {
         <div className="lf-row">
           <div className="lf-label">字体库</div>
           <div className="lf-options">
-            <button className="chip lf-chip" onClick={() => void handleImport()} disabled={importing}>
-              {importing ? "导入中…" : "导入字体文件…"}
+            <button
+              type="button"
+              className="font-import-btn"
+              onClick={() => void handleImport()}
+              disabled={importing}
+            >
+              <Icon name="plus" />
+              {importing ? "导入中…" : "导入字体文件"}
             </button>
             <span className="lf-hint">
               {status === "error"
@@ -251,6 +284,12 @@ export function LyricFontSettings() {
           const prof = profiles[spec.id];
           const primary = prof.primaryFontId ? resources.find((r) => r.id === prof.primaryFontId) ?? null : null;
           const missing = missingSampleChars(spec.id, primary);
+          // 存着的 id 找不到资源（字体被删/换机）时，选择框不能变成空白：
+          // 补一条同名占位项，用户一眼看出是"原来那个字体没了"
+          const primaryLost = !!prof.primaryFontId && !primary;
+          const fbId = prof.fallbackFontIds[0] ?? "";
+          const fbLost = !!fbId && !resources.some((r) => r.id === fbId);
+          const systemCss = chainOf([], prof.fallbackPolicy, spec.system).css;
           return (
             <div className="font-row" key={spec.id}>
               <div className="font-row-label">
@@ -259,39 +298,55 @@ export function LyricFontSettings() {
               </div>
               <div className="font-row-body">
                 <div className="font-row-selects">
-                  <select
-                    className="settings-select"
+                  <Select
+                    ariaLabel={spec.label + " 主字体"}
                     value={prof.primaryFontId ?? ""}
-                    onChange={(e) => setPrimary(spec.id, e.target.value)}
-                    aria-label={spec.label + " 主字体"}
-                  >
-                    <option value="">系统字体（默认）</option>
-                    {resources.map((r) => (
-                      <option key={r.id} value={r.id}>
-                        {r.family}
-                        {r.subfamily ? " " + r.subfamily : ""}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="settings-select"
+                    onChange={(v) => setPrimary(spec.id, v)}
+                    options={[
+                      { value: "", label: "系统字体（默认）" },
+                      ...(primaryLost
+                        ? [{ value: prof.primaryFontId as string, label: "（原字体已移除）" }]
+                        : []),
+                      ...resources.map((r) => ({
+                        value: r.id,
+                        label: r.family + (r.subfamily ? " " + r.subfamily : ""),
+                      })),
+                    ]}
+                  />
+                  <Select
+                    ariaLabel={spec.label + " 备用字体"}
                     value={prof.fallbackFontIds[0] ?? ""}
-                    onChange={(e) => setFallback(spec.id, e.target.value)}
-                    aria-label={spec.label + " 备用字体"}
-                  >
-                    <option value="">无备用字体</option>
-                    {resources
-                      .filter((r) => r.id !== prof.primaryFontId)
-                      .map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.family}
-                        </option>
-                      ))}
-                  </select>
+                    onChange={(v) => setFallback(spec.id, v)}
+                    options={[
+                      { value: "", label: "无备用字体" },
+                      ...(fbLost ? [{ value: fbId, label: "（原字体已移除）" }] : []),
+                      ...resources
+                        .filter((r) => r.id !== prof.primaryFontId)
+                        .map((r) => ({ value: r.id, label: r.family })),
+                    ]}
+                  />
                 </div>
                 {/* 预览就是真实的渲染结果：链和歌词页一模一样 */}
                 <div className="font-preview" style={{ fontFamily: stacks[spec.id].css }} lang={spec.lang}>
-                  {spec.sample}
+                  {primary
+                    ? previewRuns(spec.sample, primary, systemCss).map((run, i) =>
+                        run.missing ? (
+                          // 短缺字（1~2 字）做成小块；整段缺字（比如韩文档案里的中文示例句）
+                          // 就不加底色，只用虚线下划线，免得预览里出现一大块灰
+                          <span
+                            key={i}
+                            className={"pf-miss" + (Array.from(run.text).length > 2 ? " is-long" : "")}
+                            style={{ fontFamily: run.css }}
+                          >
+                            {run.text}
+                          </span>
+                        ) : (
+                          <span key={i}>{run.text}</span>
+                        ),
+                      )
+                    : // 没有主字体时只有系统链可展示，"缺字示例" 那半句要它也没用 ——
+                      // 而且系统链里没这个字时会被画成零宽 .notdef（看起来像少了个字）
+                      spec.sample.replace(/\s*缺字示例：.*$/, "")}
                 </div>
                 <div className="font-row-note">
                   {primary ? "主字体：" + primary.family : "主字体：系统字体"}

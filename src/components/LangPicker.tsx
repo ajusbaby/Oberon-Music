@@ -50,6 +50,7 @@ export function LangPicker({
     0,
     options.findIndex((o) => o.id === value),
   );
+  const dividerIndex = options.length > 1 ? 0 : -1;
   const current = options[selectedIndex] ?? options[0];
 
   const close = useCallback((focusButton = false) => {
@@ -141,7 +142,7 @@ export function LangPicker({
   };
 
   return (
-    <div className={"sl-lang" + (open ? " is-open" : "")} ref={rootRef} title={title}>
+    <div className={"sl-lang" + (open ? " is-open" : "")} ref={rootRef}>
       <span className="sl-lang-name">{label}</span>
       <button
         ref={btnRef}
@@ -151,6 +152,7 @@ export function LangPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel}
+        title={open ? undefined : title}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onButtonKeyDown}
       >
@@ -178,7 +180,8 @@ export function LangPicker({
               className={
                 "sl-lang-opt" +
                 (i === active ? " is-active" : "") +
-                (o.id === value ? " is-selected" : "")
+                (o.id === value ? " is-selected" : "") +
+                (i === dividerIndex ? " has-divider" : "")
               }
               // 用 mousedown：点下去的瞬间就选中，不等 mouseup，也不会先被"点外部关闭"截胡
               onMouseDown={(e) => {

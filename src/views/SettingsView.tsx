@@ -24,6 +24,7 @@ import { usePlayerStore } from "../stores/playerStore";
 import { useUiStore, toast } from "../stores/uiStore";
 import { pickAndAddMusicFolder } from "../lib/addMusic";
 import { LyricFontSettings } from "../components/LyricFontSettings";
+import { Select } from "../components/Select";
 import { StatsBackupBlock } from "../components/StatsBackupBlock";
 import {
   ACTIVE_SCALE_KEY,
@@ -374,19 +375,18 @@ export function SettingsView() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flex: "0 0 auto" }}>
-              <select
-                className="settings-select"
+              <Select
+                ariaLabel="播放输出设备"
                 value={outputId}
-                onChange={(e) => void changeOutput(e.target.value)}
-              >
-                <option value="">跟随系统默认设备</option>
-                {devices.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                    {d.isDefault ? "（系统默认）" : ""}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => void changeOutput(v)}
+                options={[
+                  { value: "", label: "跟随系统默认设备" },
+                  ...devices.map((d) => ({
+                    value: d.id,
+                    label: d.name + (d.isDefault ? "（系统默认）" : ""),
+                  })),
+                ]}
+              />
               <button className="pill-btn" onClick={() => void refreshDevices()}>
                 刷新
               </button>
@@ -403,15 +403,16 @@ export function SettingsView() {
                 设备不支持时自动回退共享，并在下面说明原因
               </div>
             </div>
-            <select
-              className="settings-select"
+            <Select
+              ariaLabel="输出模式"
               value={outMode}
-              onChange={(e) => void changeMode(e.target.value)}
-            >
-              <option value="auto">自动（优先独占）</option>
-              <option value="exclusive">独占（bit-perfect）</option>
-              <option value="shared">共享（系统混音器）</option>
-            </select>
+              onChange={(v) => void changeMode(v)}
+              options={[
+                { value: "auto", label: "自动（优先独占）" },
+                { value: "exclusive", label: "独占（bit-perfect）" },
+                { value: "shared", label: "共享（系统混音器）" },
+              ]}
+            />
           </div>
           <div className="settings-row">
             <div className="settings-row-main">
@@ -466,14 +467,15 @@ export function SettingsView() {
                   : "软件音量：在渲染线程里逐样本衰减，听感与共享模式一致"}
               </div>
             </div>
-            <select
-              className="settings-select"
+            <Select
+              ariaLabel="独占音量"
               value={exVolume}
-              onChange={(e) => void changeExclusive(e.target.value, exRate)}
-            >
-              <option value="software">软件音量</option>
-              <option value="direct">满幅直通</option>
-            </select>
+              onChange={(v) => void changeExclusive(v, exRate)}
+              options={[
+                { value: "software", label: "软件音量" },
+                { value: "direct", label: "满幅直通" },
+              ]}
+            />
           </div>
           <div className="settings-row">
             <div className="settings-row-main">
@@ -484,17 +486,18 @@ export function SettingsView() {
                   : "锁定 " + exRate + " Hz：设备不接受就直接回退共享，不会偷偷换成别的率"}
               </div>
             </div>
-            <select
-              className="settings-select"
+            <Select
+              ariaLabel="独占采样率"
               value={exRate}
-              onChange={(e) => void changeExclusive(exVolume, e.target.value)}
-            >
-              <option value="adaptive">跟随曲目</option>
-              <option value="44100">44.1 kHz</option>
-              <option value="48000">48 kHz</option>
-              <option value="88200">88.2 kHz</option>
-              <option value="96000">96 kHz</option>
-            </select>
+              onChange={(v) => void changeExclusive(exVolume, v)}
+              options={[
+                { value: "adaptive", label: "跟随曲目" },
+                { value: "44100", label: "44.1 kHz" },
+                { value: "48000", label: "48 kHz" },
+                { value: "88200", label: "88.2 kHz" },
+                { value: "96000", label: "96 kHz" },
+              ]}
+            />
           </div>
           <div className="settings-row">
             <div className="settings-row-main">

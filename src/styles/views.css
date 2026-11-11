@@ -1623,25 +1623,176 @@
     gap: 6px;
 }
 
-/* 设置页里的通用下拉（输出设备等）。名字不绑定歌词字体 ——
-   免得以后有人以为它是歌词专用的。 */
-.settings-select {
+/* ===== 通用下拉（src/components/Select.tsx）：设置页所有选择框 =====
+   不绑歌词字体，名字也刻意跟业务无关 —— 输出设备、独占参数、语言档案共用一套。
+   面板用 fixed 挂在 body 上（见组件注释），所以这里的定位值由 JS 逐次量出来，
+   这里只管长相：白面板 + 12px 圆角 + 两层阴影 + 圆角高亮。 */
+.ui-select {
+    position: relative;
+    display: inline-flex;
     flex: 0 0 auto;
+    max-width: 100%;
+}
+
+.ui-select-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 33px;
     min-width: 186px;
     max-width: 268px;
-    height: 30px;
-    padding: 0 8px;
-    border-radius: 9px;
+    padding: 0 8px 0 12px;
     border: 1px solid var(--color-border);
+    border-radius: 10px;
     background: var(--color-surface-secondary);
     color: var(--color-text-primary);
     font-family: inherit;
-    font-size: 12.5px;
+    font-size: 13px;
+    line-height: 1;
+    text-align: left;
     cursor: pointer;
+    transition: background var(--transition-fast), border-color var(--transition-fast),
+        box-shadow var(--transition-fast);
 }
 
-.settings-select:hover {
+.ui-select-btn:hover:not(:disabled) {
     background: var(--color-active);
+}
+
+/* 展开时抬成白底 + 一圈淡淡的聚焦环：一眼看出"这个下拉现在是活的" */
+.ui-select.is-open .ui-select-btn,
+.ui-select-btn:focus-visible {
+    background: var(--color-surface);
+    border-color: rgba(0, 0, 0, 0.16);
+    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.06);
+    outline: none;
+}
+
+.ui-select-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.ui-select-value {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ui-select-chevron {
+    width: 11px;
+    height: 11px;
+    flex: none;
+    fill: none;
+    stroke: var(--color-text-tertiary);
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform var(--transition-fast);
+}
+
+.ui-select.is-open .ui-select-chevron {
+    transform: rotate(180deg);
+}
+
+/* 面板：z-index 高于右键菜单(300)、低于开屏(400)。量好位置前先藏起来，
+   免得第一帧从左上角闪到正确位置。 */
+.ui-select-pop {
+    position: fixed;
+    z-index: 340;
+    width: max-content;
+    max-width: min(360px, calc(100vw - 20px));
+    padding: 5px;
+    border-radius: 14px;
+    background: var(--color-surface);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 20px 46px -14px rgba(16, 22, 30, 0.24),
+        0 3px 12px -6px rgba(16, 22, 30, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    outline: none;
+    animation: ui-select-in 150ms ease-out;
+}
+
+.ui-select-pop[data-placed="false"] {
+    visibility: hidden;
+    animation: none;
+}
+
+@keyframes ui-select-in {
+    from {
+        opacity: 0;
+        transform: translateY(-4px);
+    }
+    to {
+        opacity: 1;
+        transform: none;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ui-select-pop {
+        animation: none;
+    }
+}
+
+.ui-select-opt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 32px;
+    padding: 0 9px 0 11px;
+    border-radius: 9px;
+    font-size: 13px;
+    color: var(--color-text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.ui-select-opt.is-active {
+    background: rgba(0, 0, 0, 0.055);
+}
+
+.ui-select-opt.is-selected {
+    background: rgba(0, 0, 0, 0.045);
+    font-weight: 600;
+}
+
+.ui-select-opt.is-selected.is-active {
+    background: rgba(0, 0, 0, 0.075);
+}
+
+.ui-select-opt-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ui-select-tick {
+    width: 12px;
+    height: 12px;
+    flex: none;
+    fill: none;
+    stroke: var(--color-text-primary);
+    stroke-width: 1.9;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    opacity: 0;
+}
+
+.ui-select-opt.is-selected .ui-select-tick {
+    opacity: 1;
+}
+
+.ui-select-empty {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+    color: var(--color-text-tertiary);
 }
 
 .lf-chip {
@@ -1651,6 +1802,50 @@
     align-items: center;
     gap: 6px;
     font-size: 12.5px;
+}
+
+/* 导入字体：这一块唯一的主操作，做成黑底白字的实心按钮 ——
+   之前是浅灰 chip，跟旁边"缺字回退""来源标注"那几个开关长得一样，
+   用户找不到该点哪儿。 */
+.font-import-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 10px;
+    background: #1D1D1F;
+    color: #fff;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    letter-spacing: -0.1px;
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+    transition: background var(--transition-fast), box-shadow var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.font-import-btn:hover:not(:disabled) {
+    background: #000;
+    box-shadow: 0 5px 16px rgba(0, 0, 0, 0.24);
+}
+
+.font-import-btn:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+.font-import-btn:disabled {
+    opacity: 0.5;
+    box-shadow: none;
+    cursor: default;
+}
+
+.font-import-btn svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
 }
 
 .lf-range {
@@ -1791,7 +1986,7 @@
 }
 
 .font-row-label {
-    flex: 0 0 96px;
+    flex: 0 0 118px;
     min-width: 0;
 }
 
@@ -1803,7 +1998,8 @@
 .font-row-label .lf-hint {
     display: block;
     margin-top: 3px;
-    line-height: 1.4;
+    font-size: 11px;
+    line-height: 1.45;
 }
 
 .font-row-body {
@@ -1820,8 +2016,9 @@
     gap: 8px;
 }
 
-.font-row-selects .settings-select {
+.font-row-selects .ui-select-btn {
     min-width: 172px;
+    max-width: 236px;
 }
 
 /* 预览：虚线框表示"这是样张，不是设置项" */
@@ -1835,6 +2032,36 @@
     line-height: 1.5;
     letter-spacing: normal;
     overflow-wrap: anywhere;
+}
+
+/* 预览里主字体没有的字：换纯系统链渲染，再用虚线下划线标出来。
+   不标的话，主字体的 .notdef 常是零宽度，两个缺字会叠在一起像渲染坏了。 */
+.font-preview .pf-miss {
+    /* 做成小块：系统链也拿不到字形时仍是豆腐块，但有了固定占位宽度，
+       两个缺字不会再挤成一团；虚线提示"这个字走了回退链" */
+    display: inline-block;
+    margin: 0 2px;
+    padding: 0 4px;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.055);
+    font-size: 0.86em;
+    line-height: 1.4;
+    vertical-align: -0.06em;
+    text-decoration: underline dotted;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+    text-decoration-color: rgba(0, 0, 0, 0.28);
+}
+
+/* 整段缺失（例：韩文档案样张里的中文句子）：不加底色，只留虚线，避免大块灰 */
+.font-preview .pf-miss.is-long {
+    display: inline;
+    margin: 0;
+    padding: 0;
+    background: none;
+    font-size: 1em;
+    line-height: inherit;
+    vertical-align: baseline;
 }
 
 .font-row-note {

@@ -228,11 +228,22 @@ export function readProfiles(values: Record<string, string> | null | undefined):
       p.fallbackPolicy === "system-first" || p.fallbackPolicy === "strict" || p.fallbackPolicy === "same-language"
         ? (p.fallbackPolicy as FallbackPolicy)
         : "same-language";
+    const primaryFontId =
+      typeof p.primaryFontId === "string" && p.primaryFontId ? p.primaryFontId : null;
+    // 主字体不能同时出现在备用链里（老数据、手工改过 JSON 都可能这样溢出），
+    // 读的时候就地归一化，界面就永远不会出现"备用字体选了个等于主字体的项"
+    const fallbackFontIds: string[] = [];
+    if (Array.isArray(p.fallbackFontIds)) {
+      for (const x of p.fallbackFontIds) {
+        if (typeof x !== "string" || !x) continue;
+        if (x === primaryFontId) continue;
+        if (fallbackFontIds.includes(x)) continue;
+        fallbackFontIds.push(x);
+      }
+    }
     out[id] = {
-      primaryFontId: typeof p.primaryFontId === "string" && p.primaryFontId ? p.primaryFontId : null,
-      fallbackFontIds: Array.isArray(p.fallbackFontIds)
-        ? p.fallbackFontIds.filter((x): x is string => typeof x === "string")
-        : [],
+      primaryFontId,
+      fallbackFontIds,
       fallbackPolicy: policy,
       enabled: p.enabled !== false,
     };
