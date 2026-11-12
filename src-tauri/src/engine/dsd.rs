@@ -1120,7 +1120,7 @@ mod tests {
         let text = embedded_lyrics(p.to_str().unwrap()).expect("应能读出内嵌歌词");
         assert!(text.contains("第一行"), "歌词内容不对: {text}");
         // 完整链路：识别为内嵌歌词 + 带时间轴 + 两行
-        let l = crate::lyrics::load(p.to_str().unwrap());
+        let l = crate::lyrics::load_named(p.to_str().unwrap(), &[], &[]);
         assert_eq!(l.source, "embedded", "来源应为内嵌标签");
         assert!(l.synced, "应解析出时间轴");
         assert_eq!(l.lines.len(), 2, "行数不对");

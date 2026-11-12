@@ -40,6 +40,16 @@ import {
   readSize,
   readWeight,
 } from "../lib/lyricFont";
+import {
+  SYNC_LIMIT_MS,
+  SYNC_OFFSET_KEY,
+  clampSyncOffset,
+  formatOffset as formatSyncOffset,
+  readGlobalOffset,
+} from "../lib/lyricSync";
+
+/** 设置页滑杆的可见范围（±1s）：再大的偏移说明这首歌的时间轴本身错了，滑杆救不回来 */
+const SYNC_RANGE_MS = 1000;
 
 
 /** 字重按钮上的中文名（WEIGHT_OPTIONS 只给数值，名字属于界面） */
@@ -312,6 +322,8 @@ export function SettingsView() {
   const lyricWeight = readWeight(settings);
   // 当前句（正在播放的那句）的字号放大倍数，默认 1.5×
   const activeScale = readActiveScale(settings);
+  // 歌词同步偏移（正 = 歌词提前）。单曲的微调存在歌词页 Alt+←/→ 里，这里是全局底数
+  const globalOffset = readGlobalOffset(settings);
   // 纯汉字行怎么归属：一致性优先（默认，一律按中文）/ 准确优先（跟随歌曲主语言）
   const matchPolicy = readMatchPolicy(settings);
 
@@ -756,6 +768,35 @@ export function SettingsView() {
             >
               <Icon name="refresh" />
             </button>
+          </div>
+          <div className="lf-row">
+            <div className="lf-label">同步</div>
+            <div className="lf-stack">
+              <div className="lf-inline">
+                <input
+                  type="range"
+                  className="lf-range"
+                  min={-SYNC_RANGE_MS}
+                  max={SYNC_RANGE_MS}
+                  step={50}
+                  value={globalOffset}
+                  onChange={(e) => void persistFont(SYNC_OFFSET_KEY, String(clampSyncOffset(Number(e.target.value))))}
+                  aria-label="歌词同步偏移"
+                />
+                <span className="lf-value lf-value-wide">{formatSyncOffset(globalOffset)}</span>
+                <button
+                  className="lf-icon-btn"
+                  aria-label="重置歌词同步偏移"
+                  disabled={globalOffset === 0}
+                  onClick={() => void persistFont(SYNC_OFFSET_KEY, "0")}
+                >
+                  <Icon name="refresh" />
+                </button>
+              </div>
+              <span className="lf-hint">
+                正数 = 歌词提前。全曲目共用这一档；单曲微调在歌词页按 Alt+←/→（加 Shift 步进 250ms），上限 ±{SYNC_LIMIT_MS}ms
+              </span>
+            </div>
           </div>
           <div className="lf-row">
             <div className="lf-label">预设</div>

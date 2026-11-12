@@ -1,7 +1,7 @@
 {
   "name": "oberon",
   "private": true,
-  "version": "0.4.16",
+  "version": "0.4.17",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,8 @@
     "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/publish.ps1",
     "check:font": "node scripts/font-logic.mjs",
     "check:frame": "node scripts/frame-budget.mjs",
-    "check:lyrics": "node scripts/check-lyrics.mjs"
+    "check:lyrics": "node scripts/check-lyrics.mjs",
+    "check:engine": "node scripts/check-engine.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

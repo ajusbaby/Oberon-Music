@@ -543,10 +543,10 @@
    全列几十行同时起 opacity 过渡会把每一行都提成独立合成层 —— 只在"焦点附近"动，
    观感上这一小圈是慢慢聚拢的，远处仍是硬切换，肉眼分辨不出来但省掉一次合成风暴。 */
 .sl-g.is-near {
-    transition: opacity 400ms cubic-bezier(0.24, 1, 0.34, 1);
+    transition: opacity 200ms cubic-bezier(0.24, 1, 0.34, 1);
 }
 
-/* 切歌：整列轻抬 10px 淡入（只挂在容器上 —— .sl-track 自己有位移，动它会和弹簧打架） */
+/* 切歌：整列轻抬 10px 淡入（只挂在容器上 —— .sl-track 自己有位移，动它会和补间打架） */
 @keyframes sl-cols-in {
     from {
         opacity: 0;
@@ -567,15 +567,51 @@
     z-index: 1;
     width: 100%;
     will-change: transform;
+    /* 组都是绝对定位（见 .sl-g），这里只是它们的定位参照 + 整列高度由 layoutTrack() 写死。
+       layout containment：组内放大只影响这一组自己的布局，不会波及兄弟。 */
+    contain: layout style;
 }
 
 /* 一组 = 同一时间戳的行（原文 + 翻译）。
    模糊与透明度落在这一层，组内原文/翻译因此永远同步。 */
 .sl-g {
     padding: 0;
+    /* ---- 切句不掉帧的关键（2026-11）----
+       原来整列在普通流里：当前句一放大（.sl-line 的 font-size / padding 有 220ms 过渡），
+       它下方所有组的坐标每帧都变 ⇒ 整列几十组文字（含模糊层）每帧重新布局 + 重新光栅化，
+       一帧几十毫秒，体感就是"切换时掉到 20 帧"。
+       现在每组绝对定位到自己的流式顶点（top/height 由 layoutTrack() 行内写死，取自一次性测量），
+       组与组互不影响：一组放大时别的组既不重排也不重绘。
+       高度锁死 + flex 垂直居中 ⇒ 内容溢出上下对称地长出来，这一组的**中心恒定不变**，
+       所以居中目标不用再量"放大后的高度"，切句零测量、零重排，落位后也不会被顶第二次（无回弹）。
+       不用 transform: translateY(-50%) 居中：那会把文字放到亚像素位置上发虚。 */
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    contain: layout style;
     /* 焦点推进时各行透明度平滑过渡（只动 opacity，合成器就能做，不用重绘文字）。
-       模糊不离散过渡：filter 每帧都要重新光栅化文本，几十行一起动会掉帧。 */
-    transition: opacity 400ms cubic-bezier(0.24, 1, 0.34, 1);
+       模糊不离散过渡：filter 每帧都要重新光栅化文本，几十行一起动会掉帧。
+       200ms：切句必须"准点"感到位 —— 400ms 的淡入会让眼睛觉得歌词慢了半拍
+       （时间戳明明到了，那一句还在慢慢变亮）。 */
+    transition: opacity 200ms cubic-bezier(0.24, 1, 0.34, 1);
+}
+
+/* 屏幕外量测克隆（measureStableTops）：组要回到普通流，量的才是"谁都没放大"时的占位。
+   克隆本身仍是 position: fixed 挂在屏幕外，所以这里的 static 只作用于组，不会进主布局。 */
+.sl-track.is-measuring > .sl-g {
+    position: static !important;
+    top: auto !important;
+    height: auto !important;
+    display: block !important;
+}
+
+/* 量测克隆里必须关掉字号 / 行内 padding 的过渡：加 .is-lead 之后要立刻读到"放大态终值"，
+   否则 offsetHeight 拿到的是过渡起点（还是 1× 的高度），放大预算就白算了。 */
+.sl-track.is-measuring .sl-line {
+    transition: none !important;
 }
 
 /* 行内 padding = 7dp + 字号 × 0.11；当前句在下面按 --sl-active-scale 单独放大字号 */
@@ -589,11 +625,19 @@
     color: var(--sl-fg);
     white-space: normal;
     overflow-wrap: anywhere;
-    /* font-size / padding 也一起过渡：当前句放大时是"长出来"的，而不是啪一下跳大号 */
+    /* font-size / padding 也一起过渡：当前句放大时是"长出来"的，而不是啪一下跳大号。
+       220ms 是配合 SCROLL_LEAD_MS（260ms）的：尺寸必须在滚动落位**之前**长完，
+       否则落位那一刻高度还在变，整列就会被再顶一次 —— 那就是"切完又回弹一下"。
+       曲线用 ease-in-out（0.4,0,0.2,1）而不是强出 (0.22,1,0.36,1)：后者开头极快、
+       尾巴拖很长，和位移补间叠在一起会看着"先窜一下再慢慢蹭"。 */
+    /* 颜色这条必须很短（文档 §10.1：高亮不许 200–400ms 淡入）。
+       人眼判断"这句亮了"看的是**亮满**那一刻，不是"开始变亮"：160ms 的淡入意味着
+       时间戳到了之后还有小半秒在过渡，读起来就是"慢半拍"。60ms 已经够抹掉硬切的
+       锯齿感，又不会把准点推迟 —— 逻辑状态仍然是同一帧切换的（.is-active 由帧循环写）。 */
     transition:
-        color 220ms ease,
-        font-size 280ms cubic-bezier(0.22, 1, 0.36, 1),
-        padding 280ms cubic-bezier(0.22, 1, 0.36, 1);
+        color 60ms cubic-bezier(0.4, 0, 0.2, 1),
+        font-size 220ms cubic-bezier(0.4, 0, 0.2, 1),
+        padding 220ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* 字重全篇统一：原文行和译文行取同一个 --lyric-weight（默认粗体 700）。
@@ -611,52 +655,60 @@
     color: rgba(var(--sl-fg-rgb) / 0.74);
 }
 
-/* 当前句放大：倍率来自设置 --sl-active-scale（默认 1.5，范围 1–2）。
+/* 放大（尺寸强调）跟 .is-lead，不跟 .is-active —— 这是"切完回弹"的根因修复。
+   滚动位移在 t-260ms（SCROLL_LEAD_MS）就把这一句送到正中，而放大原本要等到时间戳 t
+   才发生：于是 t 那一刻上一句缩回、这一句长出来，整列的高度分布又变了一次，人眼看到
+   的就是"歌词已经切好了，又往后弹了一下"。现在尺寸跟滚动目标同帧开始变（220ms 内在
+   t-40ms 长完），到 t 时几何全部就位，只剩颜色变化 —— 位移全程单调，不再回弹。
+   .is-active 仍然按时间戳准点切换，负责颜色/字重，所以"什么时候算当前句"没有任何改变。
+
+   倍率来自设置 --sl-active-scale（默认 1.5，范围 1–2）。
    只放大**字号**，绝不用 transform: scale —— 那会先按原尺寸栅格化再合成放大，文字当场发虚
    （首页封面流的中心卡踩过同一个坑）。行内 padding 同比放大，不然大字会把留白吃掉。 */
-.sl-g.is-active .sl-line {
-    font-size: calc(var(--sl-fs) * var(--sl-active-scale, 1.5));
-    padding-top: calc(7px + var(--sl-fs) * var(--sl-active-scale, 1.5) * 0.11);
-    padding-bottom: calc(7px + var(--sl-fs) * var(--sl-active-scale, 1.5) * 0.11);
+.sl-g.is-lead {
+    /* 放大后的内容会溢出这一组锁死的高度（上下各约 10px，只压到邻组的 padding 区）。
+       提到上一层：溢出部分继续属于"当前句"，点击不会误落到下一句上。 */
+    z-index: 1;
+}
+
+.sl-g.is-lead .sl-line {
+    /* 倍率用 --sl-lead-scale（layoutTrack() 逐组算出来的**上限**），缺省才回落设置里的
+       --sl-active-scale。为什么要截顶：这一组的高度锁死在"1× 尺寸"，放大后内容会溢出到
+       上下相邻组的地盘上 —— 单行组只长十几像素，行内 padding 吃得住；**两行以上的组会溢出
+       三四十像素，直接压在邻组字上**（2026-11 用户截图）。所以量测时按"还剩多少空隙"
+       给每组算一个放得下的最大倍率：短句照常 1.5×，长句自动收敛到 1.2~1.35×。 */
+    font-size: calc(var(--sl-fs) * var(--sl-lead-scale, var(--sl-active-scale, 1.5)));
+    padding-top: calc(7px + var(--sl-fs) * var(--sl-lead-scale, var(--sl-active-scale, 1.5)) * 0.11);
+    padding-bottom: calc(7px + var(--sl-fs) * var(--sl-lead-scale, var(--sl-active-scale, 1.5)) * 0.11);
 }
 
 /* 译文行仍比原文小一档：两个倍率相乘，别让译文跟着原文一起放大到同号 */
-.sl-g.is-active .sl-line.is-tr {
-    font-size: calc(var(--sl-fs) * 0.82 * var(--sl-active-scale, 1.5));
+.sl-g.is-lead .sl-line.is-tr {
+    font-size: calc(var(--sl-fs) * 0.82 * var(--sl-lead-scale, var(--sl-active-scale, 1.5)));
     padding-top: 0;
 }
 
-/* 逐句扫过（规范 I.3）：当前句原文行按 --sl-k 从左往右"点亮"。
-   已唱 = 实色，未唱 = 34% 灰，交界处 5% 宽做柔化 —— 用 background-clip:text
-   而不是复制一层文本，也不给每个字套 span：一行一个渐变，每帧只改一个自定义属性。
-   （--sl-k 由 LyricsPage 的 rAF 循环写入；静止/无时间轴时缺省为 1 = 整行实色。） */
-.sl-g.is-active .sl-line:not(.is-tr) .sl-in {
-    background-image: linear-gradient(
-        90deg,
-        rgb(var(--sl-fg-rgb, 0 0 0)) 0,
-        rgb(var(--sl-fg-rgb, 0 0 0)) calc(var(--sl-k, 1) * 100%),
-        rgba(var(--sl-fg-rgb, 0 0 0) / 0.32) calc(var(--sl-k, 1) * 100% + 6%),
-        rgba(var(--sl-fg-rgb, 0 0 0) / 0.32) 100%
-    );
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-    /* 颜色交给渐变，别让上面那条 color 过渡把 transition 拖进来 */
-    transition: font-weight 220ms ease;
-}
+/* 整句高亮（2026-11 起，替掉原来的逐字扫过）：
+   唱到哪一句，那一整句一次性全亮，句子内部不再有"已唱 / 未唱"的渐变界线。
+   原因：扫过只能靠"本句 → 下一句"的间隔猜演唱时长，前奏/间奏一长就整段对不上，
+   于是歌还没开口，界线已经在一句句往前爬 —— 观感是"前奏里歌词自己在走"。
+   现在只认时间戳，代价是当前句没有进度提示；要进度看播放条的波形。
+   高亮完全由 .sl-g.is-active 承担：颜色交给 .sl-line 的 60ms color 过渡，
+   整组 opacity 过渡（200ms）只管"远近焦点"的柔化，不承担"亮起来"的时序 ——
+   两者分工明确：高亮因此是准点的，柔和只是视觉副产品。 */
 
 /* 片段字体（文档 §7.1）：一行里可能同时有"中文档案"和"拉丁档案"两段，
    每段自带 font-family；主字体没覆盖的字再单独成段（.is-fb）。
-   注意：父级 .sl-in 在当前句里是 color:transparent + background-clip:text，
-   子 span 绝不能设 color —— 一设就退化成"自己的颜色"，逐句扫过的渐变当场断掉。 */
+   子 span 只继承颜色（color: inherit）：当前句的亮度由 .sl-g.is-active 整组决定，
+   单独给某一段上色会让同一句里出现两种亮度。 */
 .sl-run {
     /* 不设 display:inline-block：那会让每段都无法断行，长句会顶出容器 */
     color: inherit;
     background: none;
 }
 
-/* 回退字：点状下划线。用的是 border 不是 text-decoration —— 下划线会被 background-clip:text
-   一起裁掉（划线不是字形），border 照常绘制，所以正好能当"来源标注"。 */
+/* 回退字：点状下划线。用 border 而不是 text-decoration：
+   border 跟字形分开绘制，不会被文字裁切/字体回退影响，正好能当"来源标注"。 */
 .sl-run.is-fb {
     cursor: help;
     border-bottom: 1px dotted rgba(var(--sl-fg-rgb, 0 0 0) / 0.45);

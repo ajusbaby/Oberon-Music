@@ -50,13 +50,22 @@ impl Lyrics {
     }
 }
 
-/// 读取某首歌的歌词
-pub fn load(audio_path: &str) -> Lyrics {
+/// 读取某首歌的歌词，并清掉"注解行"。
+///
+/// artist_fields 传歌手/专辑歌手，works 传歌名/专辑名。音乐平台导出的 LRC 经常把作者名
+/// 写进正文（STAY 里每段前面一条 `(The Kid LAROI)`，还有 `(Justin Bieber)`、
+/// `(The Kid LAROI & Justin Bieber)`），解析器只认时间轴，于是它们被当成歌词显示出来 ——
+/// 听感上就是"唱到一半冒出个作者名"。这类行必须靠曲目自身元信息才能认准：
+/// 只有括号里的整块内容等于（或包含）歌手名时才删，真正的歌词括号（`(run, run, run)`、
+/// `(won't find me out)`、`(Oh, ooh-woah)`）一个都不动。
+pub fn load_named(audio_path: &str, artist_fields: &[&str], works: &[&str]) -> Lyrics {
     let path = Path::new(audio_path);
+    let book = NameBook::from_fields(artist_fields, works);
 
     // 1) 同名歌词文件（最常见：歌曲.lrc / 歌曲.ttml / 歌曲.txt）
     if let Some((file, text, is_ttml)) = read_sidecar(path) {
-        let (synced, lines) = parse_any(&text, is_ttml);
+        let (synced, mut lines) = parse_any(&text, is_ttml);
+        drop_annotations(&mut lines, &book);
         if !lines.is_empty() {
             let origin = file.file_name().and_then(|n| n.to_str()).map(|s| s.to_string());
             return Lyrics {
@@ -70,7 +79,8 @@ pub fn load(audio_path: &str) -> Lyrics {
 
     // 2) 内嵌标签（LYRICS / UNSYNCEDLYRICS / USLT）
     if let Some(text) = embedded(path) {
-        let (synced, lines) = parse_any(&text, is_ttml_text(&text));
+        let (synced, mut lines) = parse_any(&text, is_ttml_text(&text));
+        drop_annotations(&mut lines, &book);
         if !lines.is_empty() {
             return Lyrics {
                 source: "embedded".into(),
@@ -249,9 +259,14 @@ fn credit_key(part: &str) -> &str {
 /// "作词 : xxx" / "作曲：xxx" / "编曲: xxx" 这类制作信息行。
 /// 判据只看冒号左边那一小块，而且整块必须是已知的制作条目（"作词/作曲" 这种复合写法拆开逐段判断）。
 fn is_credit_line(text: &str) -> bool {
+    // 平台自动加的"以下歌词翻译由 XX 提供"这类提示行：没有冒号，也不长，先单独拦。
+    if text.contains("歌词翻译") || text.contains("翻译由") || text.contains("歌词由") {
+        return true;
+    }
     let Some(pos) = text.find([':', '：']) else { return false };
     let head = text[..pos].trim();
-    if head.is_empty() || head.chars().count() > 12 {
+    // 上限放宽到 14：英文制作行最长的 "TRANSLATED BY" 是 13 个字符。
+    if head.is_empty() || head.chars().count() > 14 {
         return false;
     }
     head.split(['/', '、', '&'])
@@ -264,8 +279,191 @@ fn is_credit_line(text: &str) -> bool {
                     | "录音" | "和声" | "出品" | "发行" | "统筹" | "企划" | "策划" | "演唱" | "原唱"
                     | "吉他" | "贝斯" | "鼓" | "键盘" | "弦乐" | "钢琴" | "OP" | "SP" | "LRC" | "歌词"
                     | "翻译" | "校对" | "上传"
+                    // 英文制作行（Apple / QQ 音乐导出的 LRC 常见 Composed by / Lyrics by）
+                    | "COMPOSED BY" | "LYRICS BY" | "WRITTEN BY" | "ARRANGED BY" | "PRODUCED BY"
+                    | "MIXED BY" | "MASTERED BY" | "PERFORMED BY" | "TRANSLATED BY"
+                    | "TRANSLATION" | "TRANS."
             )
         })
+}
+
+/// "歌名 - 演唱者A/演唱者B" 式的头部行（音乐平台导出的歌词第一条常这么写）。
+/// 它不是歌词，只是"标题 - 歌手"：判据要求短标题 + 右侧 ≥2 个用 / 分隔的分段，
+/// 且每段都不带句读 —— 真正的歌词行很少同时满足这几条。
+fn is_title_header_line(text: &str) -> bool {
+    // 句读才算"像歌词"；括号不算 —— 歌手名常带 "Linkin Park (林肯公园)" 这种译名。
+    const PUNCT: [char; 11] = ['，', '。', '！', '？', '、', ',', '.', '!', '?', ';', '；'];
+    let Some(pos) = text.find(" - ") else { return false };
+    let head = text[..pos].trim();
+    if head.is_empty() || head.chars().count() > 40 {
+        return false;
+    }
+    let parts: Vec<&str> = text[pos + 3..].split('/').map(str::trim).collect();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().count() <= 24 && !p.contains(PUNCT))
+}
+
+// ---------------------------------------------------------------------------
+// 注解行（作者名 / 段落标记 / feat. 说明）过滤
+// ---------------------------------------------------------------------------
+
+/// 曲目自身的名字，用来认出被当成歌词的注解行。
+#[derive(Default)]
+struct NameBook {
+    /// 歌手 / 专辑歌手：归一化后做"相等或包含"匹配
+    loose: Vec<String>,
+    /// 歌名 / 专辑名：只做"完全相等"匹配（歌名常常就是一个词，包含匹配太容易误伤）
+    exact: Vec<String>,
+}
+
+impl NameBook {
+    fn from_fields(artists: &[&str], works: &[&str]) -> Self {
+        let mut book = NameBook::default();
+        for field in artists {
+            for part in split_name_parts(field) {
+                // 归一化后至少 2 个字符才有辨识度："周杰伦" 3、"LAROI" 5；单字太容易撞上正文
+                if part.chars().count() >= 2 && !book.loose.contains(&part) {
+                    book.loose.push(part);
+                }
+            }
+        }
+        for field in works {
+            let norm = normalize_name(field);
+            if norm.chars().count() >= 2 && !book.exact.contains(&norm) {
+                book.exact.push(norm);
+            }
+        }
+        book
+    }
+
+    /// 整行就是歌手名（裸写一行）
+    fn is_bare_name(&self, norm: &str) -> bool {
+        !norm.is_empty() && self.loose.iter().any(|name| norm == name)
+    }
+
+    /// 括号里"除了歌手名没别的东西"。把命中的名字一条条挖掉，剩下的只允许是
+    /// 连接词和 ≤2 个字符的残渣 —— 否则当歌词。
+    /// 这条限制是为了不误伤 `(queen of my heart)` 这种歌词：光看"包含歌手名"会把
+    /// 整句都判成注解（歌手叫 Queen 时尤其明显）。
+    fn is_name_only(&self, norm: &str) -> bool {
+        if norm.is_empty() {
+            return false;
+        }
+        let mut rest = norm.to_string();
+        let mut hit = false;
+        for name in &self.loose {
+            if name.chars().count() >= 3 && rest.contains(name.as_str()) {
+                hit = true;
+                rest = rest.replace(name.as_str(), "");
+            }
+        }
+        if !hit {
+            return false;
+        }
+        // 名字之间常留连接词：`A & B` 归一化后粘在一起，`A and B` 会留个 and
+        for glue in ["and", "with", "feat", "ft", "vs", "the", "x"] {
+            rest = rest.replace(glue, "");
+        }
+        rest.chars().count() <= 2
+    }
+
+    fn exact_match(&self, norm: &str) -> bool {
+        !norm.is_empty() && self.exact.iter().any(|name| norm == name)
+    }
+}
+
+/// 归一化：只留字母数字（含中日韩文字），统一小写。空白、标点、括号全丢掉。
+fn normalize_name(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// 把歌手字段拆成单个名字：`A/B`、`A & B`、`A、B`、`A feat. B` 都要拆开。
+fn split_name_parts(field: &str) -> Vec<String> {
+    let mut text = field.to_lowercase();
+    for sep in [
+        " feat. ", " feat ", " ft. ", " ft ", " featuring ", " with ", " vs. ", " vs ",
+    ] {
+        text = text.replace(sep, "|");
+    }
+    text.split(['/', '\\', '|', ';', '；', ',', '，', '、', '&', '+', '·', '×'])
+        .map(normalize_name)
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// 整行被一对括号包住时取里面的内容；否则 None（true 歌词里的括号不会被误判成注解）。
+fn bracket_core(text: &str) -> Option<&str> {
+    const PAIRS: [(char, char); 6] =
+        [('(', ')'), ('（', '）'), ('[', ']'), ('【', '】'), ('「', '」'), ('『', '』')];
+    let t = text.trim();
+    let first = t.chars().next()?;
+    let last = t.chars().last()?;
+    if !PAIRS.iter().any(|&(o, c)| o == first && c == last) {
+        return None;
+    }
+    Some(&t[first.len_utf8()..t.len() - last.len_utf8()])
+}
+
+/// 段落标记："(Chorus)"、"[Verse 1]"、"(副歌)"、"(x2)" 这类不是歌词。
+fn is_section_marker(norm: &str) -> bool {
+    const MARKERS: [&str; 44] = [
+        "chorus", "prechorus", "postchorus", "verse", "bridge", "hook", "refrain", "intro",
+        "outro", "interlude", "adlib", "adlibs", "breakdown", "instrumental", "spokenword", "rap",
+        "solo", "repeat", "x2", "2x", "x3", "3x", "dancebreak", "副歌", "主歌", "前奏", "间奏",
+        "尾奏", "桥段", "尾声", "合唱", "独唱", "齐唱", "说唱", "念白", "纯音乐", "伴奏", "音乐",
+        "和声", "高潮", "段落", "重复", "循环", "全文",
+    ];
+    // "(Verse 1)" / "(chorus2)"：去掉末尾数字再比一次
+    let trimmed = norm.trim_end_matches(|c: char| c.is_ascii_digit());
+    MARKERS.contains(&norm) || MARKERS.contains(&trimmed)
+}
+
+/// 制作/客串说明："(feat. Halsey)"、"(prod. by X)"、"(作词 : X)" 这类。
+fn is_credit_prefix(norm: &str) -> bool {
+    const PREFIXES: [&str; 22] = [
+        "feat", "ft", "featuring", "prod", "producedby", "writtenby", "composedby", "lyricsby",
+        "arrangedby", "mixedby", "masteredby", "performedby", "制作", "作词", "作曲", "编曲",
+        "演唱", "和声", "录音", "混音", "母带", "出品",
+    ];
+    PREFIXES.iter().any(|p| norm.starts_with(p))
+}
+
+/// 这一行是不是"注解行"（不是歌词，应该从歌词表里删掉）。
+///
+/// 判据严格到只认三种情况，宁可漏删也不错删：
+/// 1. 整行就是一个歌手名（"The Kid LAROI" 裸写一行）；
+/// 2. 整行被括号包住，里面是段落标记 / feat. 说明 / 空的；
+/// 3. 整行被括号包住，且里面除了歌手名/歌名/专辑名没别的内容。
+fn is_annotation_line(text: &str, book: &NameBook) -> bool {
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    // 1) 裸写的歌手名
+    if book.is_bare_name(&normalize_name(t)) {
+        return true;
+    }
+    let Some(core) = bracket_core(t) else { return false };
+    let norm = normalize_name(core);
+    if norm.is_empty() {
+        // "()"、"（…）" 这种纯符号行
+        return true;
+    }
+    if is_section_marker(&norm) || is_credit_prefix(&norm) {
+        return true;
+    }
+    // 3) 括号里除了曲目自身的名字没别的内容
+    book.is_name_only(&norm) || book.exact_match(&norm)
+}
+
+/// 就地删掉注解行。没有歌手名/歌名时仍然会删段落标记和 feat. 说明。
+fn drop_annotations(lines: &mut Vec<LyricLine>, book: &NameBook) {
+    lines.retain(|line| !is_annotation_line(&line.text, book));
 }
 
 pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
@@ -275,6 +473,9 @@ pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
     // 上一条歌词在 timed 里的下标（多时间戳的重复副歌会有多个）。
     // 没有时间戳的行如果能认成它的翻译，就继承这些时间点。
     let mut pending: Vec<usize> = Vec::new();
+    // 是否已经读到第一条真正的歌词行：头部那几条"标题 - 歌手 / 翻译声明 / Composed by"
+    // 只在最开头出现，读到歌词之后就不再按头部规则删东西，免得误伤正文。
+    let mut seen_timed = false;
 
     for raw in text.lines() {
         let line = raw.trim_end_matches(['\r', '\n']).trim();
@@ -312,6 +513,9 @@ pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
         if is_credit_line(content) {
             continue;
         }
+        if !seen_timed && is_title_header_line(content) {
+            continue;
+        }
         if stamps.is_empty() {
             // 混合型双语歌词：原词带时间戳、翻译整行不带时间戳。
             // 以前这类翻译无条件进 plain，而有时间轴时 plain 会被整个丢掉 —— 翻译行直接消失。
@@ -344,6 +548,7 @@ pub fn parse_lrc(text: &str) -> (bool, Vec<LyricLine>) {
             timed.push(LyricLine { time_ms: start, text, words });
         }
         pending = (first_new..timed.len()).collect();
+        seen_timed = true;
     }
 
     if timed.is_empty() {
@@ -706,6 +911,78 @@ mod tests {
         assert_eq!(lines[2].time_ms, 62000);
     }
 
+    /// STAY 这类平台导出的 LRC：每段前面一条 "(The Kid LAROI)" / "(Justin Bieber)"，
+    /// 解析器当歌词显示出来，听感就是"唱到一半冒出个作者名"。
+    #[test]
+    fn drops_artist_annotation_lines() {
+        let text = r#"[by:someone]
+[00:00.00]制作人 : Blake Slatkin/Omer Fedi
+[00:11.30](The Kid LAROI)
+[00:11.31]I do the same thing I told you that I never would
+[00:11.31]我曾说我有所不为 如今却出尔反尔
+[00:33.82](Justin Bieber)
+[00:33.82]Oh, ooh-woah (Oh, ooh-woah)
+[00:36.00](The Kid LAROI & Justin Bieber)
+[00:36.00]I need you to stay, need you to stay, hey"#;
+        let book = NameBook::from_fields(&["The Kid LAROI/Justin Bieber"], &["STAY"]);
+        let (synced, mut lines) = parse_lrc(text);
+        assert!(synced);
+        drop_annotations(&mut lines, &book);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert!(!texts.iter().any(|t| t.contains("The Kid LAROI")));
+        assert!(!texts.iter().any(|t| t.contains("Justin Bieber")));
+        // 真正的歌词一句不少，行内括号也不能被误删
+        assert!(texts.contains(&"I do the same thing I told you that I never would"));
+        assert!(texts.contains(&"我曾说我有所不为 如今却出尔反尔"));
+        assert!(texts.contains(&"Oh, ooh-woah (Oh, ooh-woah)"));
+        assert!(texts.contains(&"I need you to stay, need you to stay, hey"));
+        assert_eq!(texts.len(), 4);
+    }
+
+    /// 正文里的括号是歌词本身，没有歌手名做不出"注解"判定，必须留着。
+    #[test]
+    fn keeps_parenthesized_lyrics() {
+        let text = "[00:10.00]I just wanna run, hide it away\n[00:14.00](run, run, run)\n[00:18.00](won't find me out, won't find me out)\n[00:22.00](Oh, ooh-woah)";
+        let book = NameBook::from_fields(&["The Downtown Fiction"], &["I Just Wanna Run"]);
+        let (_, mut lines) = parse_lrc(text);
+        drop_annotations(&mut lines, &book);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(lines[1].text, "(run, run, run)");
+    }
+
+    /// 括号里含歌手名、但整体是歌词的，一个都不能删。
+    #[test]
+    fn keeps_bracket_line_that_mentions_artist_name() {
+        let text = "[00:01.00](queen of my heart)\n[00:05.00](Queen)\n[00:09.00](Drake and the whole crew)";
+        let book = NameBook::from_fields(&["Queen"], &["Queen"]);
+        let (_, mut lines) = parse_lrc(text);
+        drop_annotations(&mut lines, &book);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, vec!["(queen of my heart)", "(Drake and the whole crew)"]);
+    }
+
+    /// 段落标记 / feat. 说明即使没有歌手名元信息也要删掉。
+    #[test]
+    fn drops_section_markers_without_names() {
+        let text = "[00:00.50][Verse 1]\n[00:01.00]first line\n[00:05.00](Chorus)\n[00:06.00](feat. Halsey)\n[00:07.00](副歌)\n[00:08.00](x2)\n[00:09.00]last line";
+        let book = NameBook::from_fields(&[], &[]);
+        let (_, mut lines) = parse_lrc(text);
+        drop_annotations(&mut lines, &book);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, vec!["first line", "last line"]);
+    }
+
+    /// 裸写一行歌手名同样是注解；裸写歌名不是（hook 常这么唱）。
+    #[test]
+    fn bare_artist_name_is_annotation_but_title_is_not() {
+        let text = "[00:01.00]The Kid LAROI\n[00:02.00]STAY\n[00:03.00]hold on";
+        let book = NameBook::from_fields(&["The Kid LAROI"], &["STAY"]);
+        let (_, mut lines) = parse_lrc(text);
+        drop_annotations(&mut lines, &book);
+        let texts: Vec<&str> = lines.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, vec!["STAY", "hold on"]);
+    }
+
     /// 混合型双语歌词：原词带时间戳、翻译整行不带时间戳。
     /// 以前翻译行会被整行丢掉（有 timed 时 plain 不返回）。
     #[test]
@@ -768,6 +1045,30 @@ mod tests {
 [00:06.00]他说：别回头");
         assert_eq!(keep.len(), 2);
         assert_eq!(keep[0].text, "爱：无法言说");
+    }
+
+    /// 平台歌词的头部三连不是歌词：标题 - 歌手 / 翻译声明 / Composed by。
+    /// 它们全粘在 0:00 附近，前奏一开始就逐条点亮，看起来就是"前奏里歌词自己在走"。
+    #[test]
+    fn skips_platform_header_lines() {
+        let text = r#"[ti:Numb (Acoustic)]
+[ar:Axa/Arc North/Pop Mage]
+[00:00.00]Numb (Acoustic) - AXA/Arc North/Pop Mage/Aaron Richards/October Child
+[00:00.00]以下歌词翻译由文曲大模型提供
+[00:00.24]Composed by：Linkin Park
+[00:00.48]I'm tired of being what you want me to be
+[00:00.48]我已厌倦成为你期望的样子
+[00:04.47]Feeling so faithless lost under the surface"#;
+        let (synced, lines) = parse_lrc(text);
+        assert!(synced);
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0].text, "I'm tired of being what you want me to be");
+        assert_eq!(lines[0].time_ms, 480);
+
+        // "A - B/C" 这种形状只在还没读到歌词时才算头部，正文里照常保留
+        let (_, keep) = parse_lrc("[00:01.00]第一句\n[00:05.00]One - Two/Three");
+        assert_eq!(keep.len(), 2);
+        assert_eq!(keep[1].text, "One - Two/Three");
     }
 
     #[test]
@@ -845,7 +1146,7 @@ mod tests {
             r#"<tt><body><div><p begin="1s" end="3s"><span begin="1s" end="2s">Hi</span><span begin="2s" end="3s">there</span></p></div></body></tt>"#,
         )
         .unwrap();
-        let l = load(audio.to_str().unwrap());
+        let l = load_named(audio.to_str().unwrap(), &[], &[]);
         assert_eq!(l.source, "ttml-file");
         assert!(l.synced);
         assert_eq!(l.lines.len(), 1);

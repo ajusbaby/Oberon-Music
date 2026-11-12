@@ -274,7 +274,12 @@ pub async fn track_lyrics(
         let Some(t) = crate::db::track_by_id(c, track_id)? else {
             return Ok(crate::lyrics::Lyrics::none());
         };
-        Ok(crate::lyrics::load(&t.path))
+        // 传曲目自身的名字：平台导出的 LRC 会把 (作者名) 写进正文，靠它才认得出来
+        Ok(crate::lyrics::load_named(
+            &t.path,
+            &[t.artist.as_str(), t.album_artist.as_str()],
+            &[t.title.as_str(), t.album.as_str()],
+        ))
     })
     .await
 }

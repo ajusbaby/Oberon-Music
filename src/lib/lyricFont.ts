@@ -193,11 +193,6 @@ export const FONT_SOURCE_KEY = "lyricFontShowSource";
 export const MATCH_POLICY_KEY = "lyricFontMatch";
 export type MatchPolicy = "consistent" | "accurate";
 
-export const MATCH_POLICY_OPTIONS: { value: MatchPolicy; label: string; hint: string }[] = [
-  { value: "consistent", label: "整首一致", hint: "一首歌统一按全文统计判定语言，夹杂的英文行也跟着走" },
-  { value: "accurate", label: "逐行判定", hint: "每行单独看证据（假名 / 简体字 / 谚文），适合中日混排的歌" },
-];
-
 function emptyProfile(): FontProfile {
   return { primaryFontId: null, fallbackFontIds: [], fallbackPolicy: "same-language", enabled: true };
 }

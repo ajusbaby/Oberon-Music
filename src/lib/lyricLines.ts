@@ -38,6 +38,16 @@ export function scriptClass(text: string): ScriptClass {
 
 /** 翻译行必须出现在原词行之后这个时间内（实测《王的归来》最大间隔 12.1 秒，取 15 秒） */
 export const MAX_TRANSLATION_GAP_MS = 15000;
+/**
+ * 近似同刻聚类容差（毫秒，文档 N6）：起点相差不超过这个量的行算「同一时刻」。
+ *
+ * 为什么要聚：脏歌词里同一句会写成 [00:12.00] + [00:12.04]，或者一行的多个时间戳差
+ * 几毫秒。不聚的话它们变成两组，高亮在两组之间闪一下（4ms 的「过门」），看起来就是
+ * 「切句时抖了一下」。宁可早 1ms 不可晚 1ms：组起点取簇内**最早**的那个。
+ *
+ * 比较的是「本行与簇内第一行」的差，不是与上一行的差 —— 否则 0/70/140/210ms 会连成一片。
+ */
+export const CLUSTER_MS = 80;
 /** 至少要认出这么多对，才相信"这首歌是原词 + 翻译" */
 export const MIN_PAIRED_TRANSLATIONS = 3;
 /** 而且配对要占绝对多数：配对行数 ≥ 这个比例的"原词候选行"与"汉字行" */
@@ -48,6 +58,11 @@ export const MAX_FOLD_TRANSLATIONS = 3;
 export interface LyricLayout {
   /** 显示分组：一组 = 同一个显示块（原词 + 它的翻译） */
   groups: number[][];
+  /**
+   * 每组的起始毫秒，**严格递增**（文档 N10）：indexAt(starts, t) 靠它二分。
+   * 组内按时间稳定排序，所以「第一行」就是簇内最早的那个（N6：宁可早 1ms，不可晚 1ms）。
+   */
+  starts: number[];
   /** 这一行是翻译行（渲染小一号；不参与整首语言判定） */
   translation: boolean[];
   /** 靠 ② 认出来的翻译对数（同一时间戳成组的没算在这里） */
@@ -65,13 +80,28 @@ export function layoutLyricLines(lines: readonly TimedLyricLine[], synced = true
   const translation: boolean[] = new Array(n).fill(false);
   const singles: number[][] = [];
   for (let i = 0; i < n; i++) singles.push([i]);
-  if (!synced || n === 0) return { groups: singles, translation, paired: 0 };
+  const startOf = (k: number) => lines[singles[k][0]].timeMs;
+  if (!synced || n === 0) {
+    return { groups: singles, starts: singles.map((_, k) => startOf(k)), translation, paired: 0 };
+  }
 
-  // ① 同一时间戳的行归一组
+  // ① 同一时刻的行归一组（同一时间戳 + CLUSTER_MS 内的近似同刻）
+  //
+  // 先按时间做**稳定排序**（文档 N9）：脏歌词里 [00:20] 后面跟着一条 [00:12] 很常见
+  // （平台导出把译文/注解插错位置、手改过时间戳）。不排序的话倒序那行会自成一组，
+  // starts 就不是递增的 —— 二分索引建立在「严格递增」上，这不是风格问题，是正确性前提。
+  // 稳定（时间相同则保持文件顺序）保证原文/译文的主从关系不被排序打乱。
+  const order: number[] = new Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  order.sort((a, b) => lines[a].timeMs - lines[b].timeMs || a - b);
+
+  // 判据是「与本簇第一行相差 ≤ CLUSTER_MS」而不是与上一行比：与上一行比会让
+  // 0/70/140/210ms 连成一片，把四句并成一句。排序之后簇内第一行天然是最早的那条，
+  // 所以组起点就是簇内最小值（N6：宁可早 1ms，不可晚 1ms）。
   const base: number[][] = [];
-  for (let i = 0; i < n; i++) {
+  for (const i of order) {
     const last = base[base.length - 1];
-    if (last && lines[last[0]].timeMs === lines[i].timeMs) last.push(i);
+    if (last && lines[i].timeMs - lines[last[0]].timeMs <= CLUSTER_MS) last.push(i);
     else base.push([i]);
   }
 
@@ -151,5 +181,5 @@ export function layoutLyricLines(lines: readonly TimedLyricLine[], synced = true
       if (scriptClass(lines[group[j]].text) !== head) translation[group[j]] = true;
     }
   }
-  return { groups, translation, paired: pairedWith.size };
+  return { groups, starts: groups.map((g) => lines[g[0]].timeMs), translation, paired: pairedWith.size };
 }

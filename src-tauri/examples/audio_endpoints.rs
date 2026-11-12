@@ -48,14 +48,6 @@ fn enumerator() -> windows::core::Result<IMMDeviceEnumerator> {
     unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }
 }
 
-/// 默认渲染端点： (id, state)
-fn default_render() -> Option<(String, DEVICE_STATE)> {
-    let e = enumerator().ok()?;
-    let dev = unsafe { e.GetDefaultAudioEndpoint(eRender, eConsole) }.ok()?;
-    let st = unsafe { dev.GetState() }.ok()?;
-    Some((endpoint_id(&dev), st))
-}
-
 fn cpal_line(d: &rodio::cpal::Device) -> String {
     use rodio::cpal::traits::DeviceTrait;
     let name = match d.description() {

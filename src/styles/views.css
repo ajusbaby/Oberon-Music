@@ -1634,6 +1634,23 @@
     border-bottom: 0;
 }
 
+/* 带说明的设置行（歌词同步）：控件一行、说明缩在下面一行。
+   说明不进 .lf-row 的 flex 主行 —— 那里宽度被 68px 标签 + 42px 数值 + 28px 按钮
+   挤满，再塞一句解释就会把滑杆压到几十像素。 */
+.lf-stack {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.lf-inline {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 .lf-label {
     flex: 0 0 68px;
     font-size: 13px;
@@ -1890,6 +1907,11 @@
     font-size: 12.5px;
     color: var(--color-text-secondary);
     font-variant-numeric: tabular-nums;
+}
+
+/* 偏移值（"+1000ms"）比百分比宽，数值列单独加宽：必须排在 .lf-value 之后才能覆盖 flex */
+.lf-value-wide {
+    flex: 0 0 60px;
 }
 
 /* 小尺寸 SVG 图标按钮（28×28，替代此前又大又没样式的文件夹按钮） */
@@ -2275,6 +2297,30 @@
        inset ±2px 0 则是"两侧白线"，合起来就是用户看到的一圈白）。 */
     border: 0;
     box-shadow: 0 -14px 34px -18px rgba(0, 0, 0, 0.28);
+}
+
+/* ===== P0-B（2026-11）：光雾在动的时候，别让毛玻璃逐帧重算 =====
+   首页光雾是逐帧重绘的 WebGL 画布。它一动，压在它上方的两块 backdrop-filter
+   （播放条 blur(10px)、侧栏 blur(12px) saturate(1.25)）就必须每帧重新取背景、
+   重新模糊一次 —— 这是首页最贵的一笔固定开销，且**没有任何缓存机会**。
+
+   做法：只在「光雾确实在产帧」时（.ambient-live = 首页 + 光雾开 + 有曲目 + 正在播 +
+   不在歌词页 + 窗口可见）把这两块换成更便宜近似：
+     · 播放条本来就 76% 白，模糊结果几乎看不见 → 直接关掉滤镜，底色提到 86%
+       补回被模糊摊掉的背景亮度；像素比对差 <2%。
+     · 侧栏是"亚克力语言"的主体，改成实色会一眼看出，所以保留玻璃，只把半径
+       12 → 8px —— 背后是低频渐变，半径的观感差别远小于成本差别（成本随半径近似线性）。
+   暂停 / 离开首页 / 进歌词页 / 最小化时 .ambient-live 撤掉，玻璃原样回来。 */
+
+.app-shell.ambient-live .bottom-player {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background-color: rgba(255, 255, 255, 0.86);
+}
+
+.app-shell.ambient-live .sidebar {
+    backdrop-filter: blur(8px) saturate(1.2);
+    -webkit-backdrop-filter: blur(8px) saturate(1.2);
 }
 
 /* 最大化/全屏时窗口本身是直角，圆角裁剪也要撤掉 */
@@ -2920,4 +2966,3 @@
         transition: none;
     }
 }
-

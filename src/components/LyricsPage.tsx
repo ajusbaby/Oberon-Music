@@ -10,13 +10,16 @@
 //   · 歌词：基准 24 × 倍率；当前句按设置放大（默认 1.5×，只放大字号 —— transform
 //     会先栅格再放大、文字发虚），再靠"阶梯模糊 + alpha 差"区分远近；
 //     相邻 1/2/3/≥4 行分别是 1.7 / 3.3 / 4.9 / 6.2 的模糊。
-//   · 滚动用弹簧（ζ=1.1，k=200）而不是匀速跟随：过阻尼意味着永远不过冲、不回弹。
+//   · 滚动用固定时长补间（150~300ms，easeOutCubic，到点硬停）而不是弹簧：弹簧的渐近尾巴会
+//     拖到高亮之后 90ms、每步只有一两个设备像素，看着像"切完还在蹭"；补间没有尾巴，落位即静止。
+//   · 尺寸强调（.is-lead）跟滚动一起提前 260ms，颜色强调（.is-active）按时间戳准点 ——
+//     两者解耦，才能做到位移先到位、到点只变色：切句准时不延迟，落位后不再回弹。
 //   · 页面留白 30dp，封面圆角 12dp / 描边 2dp，底部固定 120（= 项目里的 --player-height）。
 //
 // 类名统一 sl-* 前缀：views.css 里还挂着一批旧的 .lyrics-page .line ... 规则，
 // 换前缀后它们自然不再命中，省去一场特异性战争（真正失效的块已经删掉了）。
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as api from "../api/ipc";
 import type { LyricsResult } from "../api/types";
 import { Icon } from "./Icon";
@@ -26,7 +29,7 @@ import { FlowingLight } from "./FlowingLight";
 import { FALLBACK_LOOK, sampleCover } from "../lib/coverColor";
 import type { CoverLook } from "../lib/coverColor";
 import { useCover } from "../lib/cover";
-import { frameBudget } from "../lib/frameBudget";
+import { isWindowInvisible, isWinFocused, onWindowVisibilityChange } from "../lib/winFocus";
 import { usePlayerStore } from "../stores/playerStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import {
@@ -52,7 +55,16 @@ import {
   splitLineRuns,
 } from "../lib/lyricFont";
 import type { FontProfileId, LineRun } from "../lib/lyricFont";
+import { advanceIndex, LyricClock } from "../lib/lyricEngine";
 import { layoutLyricLines } from "../lib/lyricLines";
+import {
+  clampSyncOffset,
+  formatOffset,
+  PER_TRACK_KEY,
+  readSyncOffset,
+  readTrackOffset,
+  withTrackOffset,
+} from "../lib/lyricSync";
 import { ensureFontsRegistered, useFontStore } from "../stores/fontStore";
 import { useUiStore, toast } from "../stores/uiStore";
 
@@ -73,20 +85,45 @@ function codepointsOf(text: string): string {
 const IMMERSIVE_DELAY = 3200;
 
 /* ===== 歌词滚动 =====
-   滚动用的是过阻尼弹簧（ζ≈1.12、k≈190）。ζ>1 = 永远不会过冲回弹，
-   换句时是一段"快起、慢收"的位移，而不是我们原来那条匀速直线。
-   换算成这里的微分方程：m=1，c = 2ζ√k ≈ 30.9，a = -k·x - c·v。
-   （逐行错峰延迟（50ms/1.05^k）没有做：那会给十几行同时挂 transform 动画，
-    和本项目"歌词只动一层 transform、一次 reflow"的约束直接冲突，收益也看不出来。） */
-const SPRING_K = 190;
-const SPRING_ZETA = 1.12;
-const SPRING_C = 2 * SPRING_ZETA * Math.sqrt(SPRING_K);
-/** 单帧最大步进（毫秒）：窗口卡顿/后台恢复后不至于瞬移 */
-const SPRING_DT_MAX = 48;
-/** 速度上限（px/s）：从第一句直接跳到第 300 句时，别让整列文字糊成一条线 */
-const SPRING_VMAX = 6800;
-/** 最后一句没有下一句时，假定这一句唱 5.2s（扫过动画不会卡在中间） */
-const LAST_LINE_MS = 5200;
+   位移是**固定时长的补间**（不是弹簧）：每次换句给定一个明确的时长，到点硬停在目标值。
+
+   为什么不用弹簧（2026-11 CDP 实测推翻）：临界阻尼弹簧是渐近线，(1+ωt)e^{-ωt} 的尾巴永远
+   走不完。采样 .sl-track 的 transform 序列，每次切句前 14 帧都是干净的 16.6~16.8ms，但末段
+   变成 33 → 50/66/83ms 一步、每步只 0.8px（dpr=1.25 ⇒ 一个设备像素），**最后一次位移发生在
+   高亮之后 94ms** —— 肉眼就是"切完了还在蹭一下"，体感像掉到 20 帧。主线程其实一直是满帧
+   （rAF 间隔 p95=5.6ms，180Hz 屏），所谓掉帧全是这条像素阶梯尾巴。
+   补间到点即停，尾巴长度恒为 0；easeOutCubic 让起步快、落地稳，手感与原来的弹簧接近
+   （逐行错峰延迟没做：那会给十几行同时挂 transform，和"歌词只动一层 transform"的约束冲突）。 */
+/** 定频节拍：60 帧 / 秒。切换动画严格按这个节拍推进，与屏幕刷新率无关。 */
+const TICK_MS = 1000 / 60;
+/** 节拍余量：小于 (TICK_MS - TICK_SLACK) 的回调直接跳过，避免漏帧 */
+const TICK_SLACK = 1.5;
+/** 换句位移的最短 / 最长时间：太短会一窜，太长会让下一句的提前量吃紧 */
+const SCROLL_MIN_MS = 150;
+const SCROLL_MAX_MS = 300;
+/** 每像素额外加多少时长：句距远的换句多给一点，速度不至于失控 */
+const SCROLL_MS_PER_PX = 0.55;
+
+/** 一段位移补间：start 那一帧起 dur 毫秒从 from 走到 to，到点硬停 */
+type Tween = { from: number; to: number; start: number; dur: number };
+
+function startTween(from: number, to: number, now: number): Tween {
+  const dist = Math.abs(to - from);
+  const dur = Math.min(SCROLL_MAX_MS, Math.max(SCROLL_MIN_MS, SCROLL_MIN_MS + dist * SCROLL_MS_PER_PX));
+  return { from, to, start: now, dur };
+}
+
+/**
+ * 当前句放大后允许溢出自己那一组盒子的缓冲（上下各一份，px）。
+ *
+ * 盒子高度锁死在"1× 尺寸"，而 .is-lead 会把它放大到 --sl-lead-scale（最多 1.5×）：
+ * 单行组只长十几像素，靠行内 padding 就吃下去了；**两行以上的组会溢出三四十像素，
+ * 直接压到上下相邻组的字上**（用户截图里的现象）。所以每组两边各留 8px，再按"还剩多少
+ * 空隙"把这一组的放大倍率截顶（见 measureStableTops 里的 scales）。
+ */
+const LEAD_RESERVE_PX = 8;
+/** 截顶之后仍要保留的最小字间净空（px）：别让两行字贴到刚好相切 */
+const LEAD_BREATH_PX = 4;
 
 /**
  * 阶梯模糊（px）：当前句 0，往外 1.7 / 3.3 / 4.9 / 6.2。
@@ -99,14 +136,330 @@ const BLUR_STEPS = [1.7, 3.3, 4.9, 6.2];
 /** 只有离当前句这么近的行才真的挂 filter（见 blurFor 的注释）。 */
 const BLUR_LIMIT = 7;
 
+/**
+ * 整列「稳定态」的组顶坐标（一次量好，换句时直接查表）。
+ *
+ * 活的 DOM 量不得：上一句正在缩回原尺寸，它上方还占着旧的大高度，直接读
+ * el.offsetTop 拿到的是「上一句还没缩完」的坐标 —— 等比它缩完，整列会自己上移
+ * 十几像素，正是用户说的「切完又往后回弹一下」。
+ *
+ * 这里把整列克隆到屏幕外、把 is-active 去掉后量一遍：所有组都处于"未点亮"的
+ * 稳定尺寸，得到的 offsetTop 就是任何一句高亮时它上方占位的真实总和。
+ * 全曲只量一次（歌词 / 字体 / 宽度变化时失效），换句不再有整列克隆的开销。
+ */
+type TrackGeometry = {
+  epoch: unknown;
+  width: number;
+  /** 每一组的「谁都没放大」时的流式顶点与高度（相对 .sl-track） */
+  tops: number[];
+  heights: number[];
+  /** 组中心 = tops + heights/2；绝对定位后它就是这组恒定不变的位置 */
+  centers: number[];
+  /**
+   * 每一组的放大倍率上限（≤ --sl-active-scale）：行数多的组放不下就截顶，
+   * 保证放大后不压到相邻组的字（见 measureStableTops）。
+   */
+  scales: number[];
+  /** 整列总高（给 .sl-track 撑高度用） */
+  total: number;
+};
+
+/**
+ * 整列「稳定态」几何：一次量好，换句时只查表。
+ *
+ * 为什么要克隆到屏幕外量：上一句正在缩回原尺寸时它上面还占着旧的大高度，直接读活 DOM 的
+ * offsetTop 拿到的是「上一句还没缩完」的坐标 —— 等它缩完整列会自己上移十几像素，正是用户
+ * 说的「切完又往后回弹一下」。克隆里清掉 is-* 后，所有组都在"谁都没放大"的稳定尺寸上。
+ *
+ * 顺带算出每一组的**放大预算**（scales）：盒子高度锁死在 1×，而 .is-lead 要把字号乘到
+ * --sl-active-scale —— 两行以上的组会溢出三四十像素压到相邻组的字上。所以这里再量一遍
+ * 放大态，用「放大态超出盒子多少」反推每一组能用的最大倍率（行数越多截得越狠）。
+ */
+function measureStableTops(
+  track: HTMLElement,
+  host: HTMLElement,
+  width: number
+): { tops: number[]; heights: number[]; total: number; scales: number[] } {
+  const clone = track.cloneNode(true) as HTMLElement;
+  clone.setAttribute("aria-hidden", "true");
+  // is-measuring：把"绝对定位 + 固定高度"抵消掉，让它回到普通流里量真实占位
+  clone.className = "sl-track is-measuring";
+  clone.style.cssText +=
+    ";position:fixed;left:-99999px;top:0;visibility:hidden;pointer-events:none;width:" + width + "px;height:auto;";
+  host.appendChild(clone);
+  const groups = Array.from(clone.querySelectorAll<HTMLElement>(".sl-g"));
+  // is-lead（正在放大的那一句）也必须去掉：这里先量的是"谁都没放大"的占位。
+  // 更要紧的是清掉上一轮写在行内的 --sl-lead-scale：克隆会把它一起带过来，而
+  // .is-lead 的字号正是读这个变量 —— 不清就是拿旧结果量新结果（量出来永远收敛到同一个数）。
+  for (const g of groups) {
+    g.classList.remove("is-active", "is-near", "is-lead");
+    g.style.removeProperty("--sl-lead-scale");
+  }
+  const kids = Array.from(clone.children) as HTMLElement[];
+  // ① 先一次读完所有 1× 高度（读完再写类，避免 O(n) 次强制布局）
+  const baseHeights = kids.map((k) => k.offsetHeight);
+  // 行内 padding 的 1× 值（7 + fs*0.11）：放大后 padding 同比变，这里只用它的量级。
+  // 半行距也一起取：译文行 padding-top 是 0，它跟上方大字之间真正能让出来的净空只有半行距，
+  // 计算倍率上限时按"较小的那一侧"算，才不会把译文顶到大字上。
+  const lineEl = kids.length ? kids[0].firstElementChild as HTMLElement | null : null;
+  const lineStyle = lineEl ? getComputedStyle(lineEl) : null;
+  const pad = lineStyle ? parseFloat(lineStyle.paddingTop) || 0 : 0;
+  const halfLeading = lineStyle
+    ? Math.max(0, ((parseFloat(lineStyle.lineHeight) || 0) - (parseFloat(lineStyle.fontSize) || 0)) / 2)
+    : 0;
+  const capRaw = kids.length ? parseFloat(getComputedStyle(kids[0]).getPropertyValue("--sl-active-scale")) : NaN;
+  const scaleCap = capRaw > 1 ? capRaw : 1.5;
+  // ② 整体按"最大倍率"放大再读一遍（is-measuring 下字号/padding 过渡被 CSS 关掉，读到的是终值）。
+  //    倍率显式写成 scaleCap：不依赖任何遗留的 --sl-lead-scale，量出来的 growth 才是干净的。
+  for (const k of kids) {
+    k.style.setProperty("--sl-lead-scale", String(scaleCap));
+    k.classList.add("is-lead");
+  }
+  const leadHeights = kids.map((k) => k.offsetHeight);
+  for (const k of kids) {
+    k.classList.remove("is-lead");
+    k.style.removeProperty("--sl-lead-scale");
+  }
+  clone.remove();
+
+  /* ③ 每一组的倍率上限（精确解，不是估一个"可溢出量"）：
+
+     放大 s 倍时这一组的内容高出盒子 growth = (s-1)·g（g = 倍率每 +1.0 长多少像素），
+     上下各溢出 growth/2；而邻组的字离盒边至少半行距、放大那一侧自己的行内 padding 是 s·pad。
+     于是相邻两组的字之间净空 = s·pad + halfLeading − growth/2，要求它 ≥ LEAD_BREATH_PX：
+
+         s·pad + halfLeading + g/2 + LEAD_RESERVE_PX − (s−1)·g/2 ≥ LEAD_BREATH_PX
+      ⇒  s ≤ (g/2 + halfLeading + LEAD_RESERVE_PX − LEAD_BREATH_PX) / (g/2 − pad)
+
+     g/2 ≤ pad 时永远放得下，直接用设置值。单行组因此照常拿满倍率，两行以上的组按行数收敛。 */
+  const tops: number[] = [];
+  const heights: number[] = [];
+  const scales: number[] = [];
+  let acc = 0;
+  for (let i = 0; i < kids.length; i++) {
+    const box = baseHeights[i] + LEAD_RESERVE_PX * 2;
+    const grow = scaleCap > 1 ? Math.max(0, leadHeights[i] - baseHeights[i]) / (scaleCap - 1) : 0;
+    const halfGrow = grow / 2;
+    let scale = scaleCap;
+    if (halfGrow > pad) {
+      const fit = (halfGrow + halfLeading + LEAD_RESERVE_PX - LEAD_BREATH_PX) / (halfGrow - pad);
+      scale = Math.min(scaleCap, Math.max(1, fit));
+    }
+    tops.push(acc);
+    heights.push(box);
+    scales.push(scale);
+    acc += box;
+  }
+  return { tops, heights, total: acc, scales };
+}
+
+/**
+ * 把几何落到 DOM：每组绝对定位在「自己的流式顶点」，并**锁死这一组的高度**。
+ *
+ * 这一步是"切句不掉帧"的关键（用户反馈：切换动画偶尔掉到 20 帧）。原来的做法是
+ * 整列保持普通流 —— 当前句一放大，它下方所有组的位置全部改变，于是**整列文字每帧
+ * 都要重新布局、重新光栅化**（几十组文字 + 模糊层），一帧几十毫秒，体感就是卡成 20 帧。
+ *
+ * 现在：组与组互不相关，一组放大时别的组既不重排也不重绘；放大绕自身中心长出来
+ * （高度锁死 + flex 居中，内容溢出得上下对称），所以「这一组的中心」恒定不变 ——
+ * 居中目标不用再量"放大后的高度"，切句时没有任何测量、没有任何重排。
+ */
+function layoutTrack(track: HTMLElement, geo: TrackGeometry): void {
+  const kids = track.children;
+  const n = Math.min(kids.length, geo.centers.length);
+  for (let i = 0; i < n; i++) {
+    const el = kids[i] as HTMLElement;
+    el.style.top = geo.tops[i].toFixed(1) + "px";
+    el.style.height = geo.heights[i].toFixed(1) + "px";
+    // 放大倍率上限：行数多的组会被截顶（否则放大后压住相邻组的字），CSS 侧读 --sl-lead-scale
+    el.style.setProperty("--sl-lead-scale", geo.scales[i].toFixed(3));
+  }
+  track.style.height = geo.total.toFixed(1) + "px";
+}
+
+/**
+ * 算出「把第 index 组居中」需要的位移。
+ *
+ * 几何全部走缓存（见 measureStableTops / layoutTrack），所以这里**没有任何 DOM 测量**：
+ * 切句只是查一次表，主线程不会被强制布局打断（那一下正是掉帧的来源之一）。
+ * 由于每组高度被锁死、放大绕中心对称溢出，组的中心与"当前是否放大"无关 ——
+ * 落位之后不会有第二次修正，也就不会有回弹。
+ */
+function centerTargetFor(
+  track: HTMLElement,
+  box: HTMLElement,
+  index: number,
+  cache: { current: TrackGeometry | null },
+  epoch: unknown
+): number {
+  const host = box.parentElement ?? box;
+  const width = track.clientWidth || box.clientWidth;
+  let entry = cache.current;
+  if (
+    !entry ||
+    entry.epoch !== epoch ||
+    entry.width !== width ||
+    entry.centers.length !== track.children.length
+  ) {
+    const stable = measureStableTops(track, host, width);
+    const centers: number[] = [];
+    for (let i = 0; i < stable.tops.length; i++) centers.push(stable.tops[i] + stable.heights[i] / 2);
+    entry = {
+      epoch,
+      width,
+      tops: stable.tops,
+      heights: stable.heights,
+      centers,
+      total: stable.total,
+      scales: stable.scales,
+    };
+    cache.current = entry;
+    layoutTrack(track, entry);
+  }
+  const c = entry.centers[index];
+  if (c === undefined) return 0;
+  return box.clientHeight / 2 - c;
+}
+
 /** 滚轮回位时长（毫秒） */
 const WHEEL_RETURN_MS = 500;
+
+/**
+ * 滚动提前量（毫秒）：位移比"这一句开口"早这么多开始。
+ *
+ * 换句位移（补间）最长 300ms（SCROLL_MAX_MS），如果等时间戳到了才起步，人眼看到的是
+ * "该唱了 → 歌词才开始动 → 还要再等两三百毫秒才停稳"，主观就是歌词慢半拍。
+ * 提前 260ms 起步，这一句开口的瞬间它刚好落到正中。
+ * 高亮（is-active）仍按时间戳准点切换，两者解耦：先滚动、后点亮。
+ */
+const SCROLL_LEAD_MS = 260;
 
 /* ===== 圆形扩散（进场） =====
    圆盘是预先画好的位图，动画只改 transform: scale()，内容不参与缩放 ——
    这样进场期间不会每帧按新圆重新光栅化整窗（clip-path 动画的老问题）。
    1.45× 是有意压住的：scale 越大，浏览器按最大比例栅格化出来的纹理越大（5× 时约 3300²）。 */
 const DISC_BLOOM = 1.45;
+
+type LyricGroupProps = {
+  indices: number[];
+  lines: LyricsResult["lines"];
+  lineRuns: (LineRun[] | null)[] | null;
+  lineProfiles: FontProfileId[];
+  lineStacks: string[];
+  songProfile: FontProfileId;
+  synced: boolean;
+  /** 这一组就是当前唱的句子（.sl-g.is-active，整句全亮；按时间戳准点切换） */
+  active: boolean;
+  /**
+   * 这一组是「滚动目标」（.sl-g.is-lead，放大字号 + 行内 padding 放大）。
+   * 比 active 早 SCROLL_LEAD_MS 一步：位移先过去、尺寸先长好，等时间戳到了只剩颜色变化，
+   * 所以落位之后整列不会再被"字体长出来"顶一次（那一下就是回弹）。
+   */
+  lead: boolean;
+  /** 焦点上下 2 行（.sl-g.is-near，opacity 才有过渡） */
+  near: boolean;
+  blur: number;
+  alpha: number;
+  runCss: (run: LineRun) => string;
+  onSeekMs: (ms: number) => void;
+};
+
+/**
+ * 一组歌词（同一时间戳的原文 + 翻译）。
+ *
+ * 为什么单独抽出来并 memo：一次 setActiveGroup 会让整个歌词页重渲染，而列里通常有
+ * 60~120 组、每组 1~3 行、每行再按字体来源切 1~4 个 span。焦点每前进一步，只有焦点附近
+ * ±5 组（blur 阶梯 + alpha 渐变区）真的变了，远处那些组的 props（alpha 恒 0.52、blur 恒 0、
+ * 数组引用稳定）完全一致 —— memo 让它们整块跳过，切句时的渲染量降到 1/10 以下。
+ * 这里的 props 全部是原始值或引用稳定的数组，浅比较就够，不要往里传新对象/新箭头函数。
+ */
+const LyricGroup = memo(function LyricGroup(props: LyricGroupProps) {
+  const {
+    indices,
+    lines,
+    lineRuns,
+    lineProfiles,
+    lineStacks,
+    songProfile,
+    synced,
+    active,
+    lead,
+    near,
+    blur,
+    alpha,
+    runCss,
+    onSeekMs,
+  } = props;
+  // 点哪一行都跳到这一条的演唱时刻：翻译行的时间戳是它出现的时间，不是唱到这一句的时间
+  const headMs = lines[indices[0]]?.timeMs ?? 0;
+  return (
+    // 同一时间戳的多行（原词 + 翻译）作为**一个整体**渲染：
+    // 模糊、行距、颜色都落在这一层，原词和翻译永远一起变化。
+    <div
+      className={
+        "sl-g" + (lead ? " is-lead" : "") + (active ? " is-active" : "") + (near ? " is-near" : "")
+      }
+      style={{
+        // 不加 opacity 过渡：几十行同时起过渡会把每一行都提成独立合成层
+        opacity: alpha,
+        filter: blur > 0.05 ? "blur(" + blur.toFixed(2) + "px)" : undefined,
+      }}
+    >
+      {indices.map((index, k) => {
+        const line = lines[index];
+        if (!line) return null;
+        // 这一行的档案：字体链按它取，lang 属性同时修中日的汉字字形变体
+        const profile = lineProfiles[index] ?? "latin";
+        const runs = lineRuns?.[index] ?? null;
+        return (
+          <p
+            key={index}
+            // k>0 = 同组里的第二行以后，也就是翻译行（字号 ×0.8）
+            className={"sl-line" + (k > 0 ? " is-tr" : "") + (synced ? " is-clickable" : "")}
+            lang={profileLang(profile)}
+            style={{ fontFamily: lineStacks[index] }}
+            onClick={synced ? () => onSeekMs(headMs) : undefined}
+          >
+            {/* 文字包一层 inline 容器：开了「显示实际字体来源」时，这一段会按
+                "主字体 / 回退"再切成几段，于是眼睛看到的字面来源就是真的。 */}
+            <span className="sl-in">
+              {runs
+                ? runs.map((run, ri) => (
+                    <span
+                      key={ri}
+                      className={"sl-run" + (run.fallback ? " is-fb" : "")}
+                      style={{ fontFamily: runCss(run) }}
+                      title={
+                        run.fallback
+                          ? "这几个字主字体没有，实际由该语言的系统字体渲染（点开看码位）"
+                          : "这一段的字来自主字体"
+                      }
+                      onClick={
+                        run.fallback
+                          ? (e) => {
+                              // 诊断模式（§7.3）：点回退段给出缺字列表 + 码位，同时别让点击顺带跳转播放
+                              e.stopPropagation();
+                              toast(
+                                "主字体缺这几个字，已回退到系统字体：" +
+                                  codepointsOf(run.text) +
+                                  (run.profile === songProfile ? "" : "（" + PROFILES[run.profile].label + "档案）"),
+                                "info",
+                              );
+                            }
+                          : undefined
+                      }
+                    >
+                      {run.text}
+                    </span>
+                  ))
+                : line.text}
+            </span>
+          </p>
+        );
+      })}
+    </div>
+  );
+});
 
 export function LyricsPage() {
   const open = useUiStore((s) => s.lyricsOpen);
@@ -220,7 +573,7 @@ export function LyricsPage() {
   }, [open, current?.trackId]);
 
   // 切歌过场：整列轻抬 10px 淡入（CSS 见 .lyrics-page.swapping）。
-  // 动效挂在 .sl-lyrics 容器上，绝不碰 .sl-track —— 那一层的 transform 属于弹簧。
+  // 动效挂在 .sl-lyrics 容器上，绝不碰 .sl-track —— 那一层的 transform 属于滚动补间。
   const [swapping, setSwapping] = useState(false);
   const prevTrackRef = useRef<number | null | undefined>(undefined);
   useEffect(() => {
@@ -382,25 +735,83 @@ export function LyricsPage() {
     [lyrics]
   );
   const groups = layout.groups;
+  /** 每组起始毫秒（严格递增）：帧循环靠它二分定位当前组 */
+  const starts = layout.starts;
   // 翻译行：渲染小一号，且不参与整首语言判定（翻译的文字体系是译者选的，不是这首歌的语言）
   const translation = layout.translation;
 
-  // 位置锚点：store 每次下发位置时记一笔，rAF 里按流逝时间外推。
-  // 进度事件约 800ms 一次，直接用它驱动会出现「上一句还没亮完就换行」。
-  const anchorRef = useRef({ secs: 0, at: 0, playing: false });
+  /**
+   * 帧循环的重新点火开关（P0-a）。
+   * 循环一旦判定"画面不会再变"就真的停掉调度，下面任何一个唤醒源都要叫它回来：
+   * 位置/状态变化、滚轮、歌词基准位重算、窗口重新可见。
+   */
+  const kickRef = useRef<(() => void) | null>(null);
+  /** 上一帧真正做了工作的时刻（毫秒）：失焦节流用，避免每帧都去读焦点状态 */
+  const lastWorkRef = useRef(0);
+
+  /* ===== 播放时钟：锚点插值 + 只向前对齐 =====
+     实现全在 src/lib/lyricEngine.ts 的 LyricClock（纯逻辑，能在 Node 里断言）。这里只接线：
+       · 位置/状态变化 → report()，由它决定要不要重锚（只有拖动 / 切歌 / 追帧才重锚）；
+       · 每帧 → now()，按 1× 墙钟外推，绝不把位置事件当成帧时间（文档反模式 A1）；
+       · report() 判定跳变时置 snapPending，位移那一帧直接落位，不播补间（§10.2.3）。
+     为什么不把上报值直接当时间：进度事件约 800ms 一次，位置是台阶，全靠 1× 外推抹平；
+     只要上报本身比实际出声慢一点点（后端任何一处采样率/声道声明误差都会变成率误差），
+     重锚就把误差原样吃进来并随播放时间累积 —— 前半首还准、后半首慢半秒正是这个形态。 */
+  const clockRef = useRef<LyricClock | null>(null);
+  if (!clockRef.current) clockRef.current = new LyricClock();
+  /** 时钟判定跳变（拖动 / 切歌 / 追帧）后置位：位移直接落位，不做补间动画 */
+  const snapPendingRef = useRef(false);
+
   useEffect(() => {
-    anchorRef.current = {
-      secs: position,
-      at: performance.now(),
-      playing: status === "playing",
-    };
+    const sample = clockRef.current!.report(position, status === "playing", performance.now());
+    if (sample.snapped) snapPendingRef.current = true;
+    // 暂停/恢复/拖动进度：循环若已停帧，这一下把它叫起来补画一帧
+    kickRef.current?.();
   }, [position, status]);
 
-  /** 歌词纵向位移：弹簧跟随基准位 + 滚轮偏移 */
+  // 换歌：时钟归零并重新起锚（率样本跟着"这一条播放链"走，必须作废），
+  // 第一句直接落位 —— 新歌不该从上一位歌的位置滑进来。
+  useEffect(() => {
+    clockRef.current!.reset(0, performance.now());
+    snapPendingRef.current = true;
+    yReadyRef.current = false;
+  }, [current?.trackId]);
+
+  /* ===== 歌词与声音的偏移账 =====
+     t = position + fileOffset + userOffset + latency（规则见 src/lib/lyricSync.ts）。
+     fileOffset 是歌词文件自己写的修正，后端已经并进 timeMs；这里加的是 userOffset
+     （全局一个 + 本曲一个），所以"这首歌的歌词整体偏晚"可以就地修，不影响别的歌。 */
+  const syncOffsetMs = readSyncOffset(settingsValues, current?.trackId ?? null);
+  const offsetRef = useRef(syncOffsetMs);
+  // 渲染期直接赋值：偏移只在设置变化或换歌时改，比放进 effect 早一帧生效，也不会闪。
+  offsetRef.current = syncOffsetMs;
+
+  // Alt+←/→ 微调「本曲」同步偏移（Alt+Shift 步进 250ms）。只在歌词页开着时生效，
+  // 用捕获阶段抢在全局 ←/→（切歌）之前把它消费掉。
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+      const trackId = current?.trackId;
+      if (!dir || trackId == null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const step = e.shiftKey ? 250 : 50;
+      const next = clampSyncOffset(readTrackOffset(settingsValues, trackId) + dir * step);
+      void writeSetting(PER_TRACK_KEY, withTrackOffset(settingsValues, trackId, next));
+      toast("本曲歌词同步 " + formatOffset(next) + "（Alt+←/→ 微调，加 Shift 步进 250ms）");
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, current?.trackId, settingsValues, writeSetting]);
+
+  /** 歌词纵向位移：补间跟随基准位 + 滚轮偏移 */
   const baseYRef = useRef(0);
   const wheelYRef = useRef(0);
   const yRef = useRef(0);
-  const vRef = useRef(0);
+  /** 正在跑的位移补间（null = 已在目标位上）；到点即清，不留渐近尾巴 */
+  const tweenRef = useRef<Tween | null>(null);
   const yReadyRef = useRef(false);
   const wheelTimer = useRef<number | null>(null);
   // 设备像素比（用于把位移对齐到整数设备像素，避免文字发虚）
@@ -412,64 +823,107 @@ export function LyricsPage() {
   // 滚轮松手后的回位补间（线性滑回 0，而不是瞬跳）
   const wheelReturnRef = useRef<{ from: number; start: number } | null>(null);
   const activeGroupRef = useRef(-1);
-  // 逐句扫过：当前写着 --sl-k 的那个元素（切行时要把上一行的变量清掉）
-  const karaokeRef = useRef<{ group: number; node: HTMLElement | null; k: number }>({
-    group: -1,
-    node: null,
-    k: -1,
-  });
   const [activeGroup, setActiveGroup] = useState(-1);
+  // 滚动目标比高亮早 SCROLL_LEAD_MS 一步：先滚到位，再准点点亮
+  const scrollGroupRef = useRef(-1);
+  const [scrollGroup, setScrollGroup] = useState(-1);
+  /** 整列「稳定态」组顶坐标的缓存：换句时直接查表，不再克隆整列 */
+  const topsRef = useRef<TrackGeometry | null>(null);
 
   // 每帧：算出当前组，并把位移积分到 DOM（不触发 React 重渲染），
   // 只有换行时才 setState，避免 60fps 重渲染整列歌词。
   useEffect(() => {
-    if (!open || !lyrics?.synced || groups.length === 0) {
+    if (!open || !lyrics?.synced || starts.length === 0) {
       activeGroupRef.current = -1;
       setActiveGroup(-1);
+      scrollGroupRef.current = -1;
+      setScrollGroup(-1);
       return;
     }
     wheelYRef.current = 0;
-    const lines = lyrics.lines;
     let raf = 0;
-    const loop = () => {
+    let alive = true;
+    function stop() {
+      if (raf) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      }
+    }
+    function wake() {
+      if (!alive || raf || isWindowInvisible()) return;
+      // 停帧期间可能过去了几十秒：补间用绝对时刻算进度，下一帧会直接判 p>=1 落位，不会补播
+      lastFrameRef.current = 0;
+      raf = requestAnimationFrame(loop);
+    }
+    function loop() {
+      raf = 0;
       const ts = performance.now();
-      // 全局帧预算：显示器 120/144/180Hz 时把逐帧工作限到 ~60fps
-      if (!frameBudget(ts)) {
+      // 失焦（窗口还在屏幕上，只是键盘焦点在别处）：降到 ~11fps。
+      // 不能直接停 —— 那样歌词会当场冻住，而用户常常一边看一边在别的窗口打字。
+      if (!isWinFocused() && ts - lastWorkRef.current < 90) {
         raf = requestAnimationFrame(loop);
         return;
       }
-      const a = anchorRef.current;
-      const ms = (a.playing ? a.secs + (ts - a.at) / 1000 : a.secs) * 1000;
-      let g = -1;
-      for (let i = 0; i < groups.length; i++) {
-        if (lines[groups[i][0]].timeMs <= ms) g = i;
-        else break;
+      // ===== 定频 60 帧 =====
+      // 用户要求「歌词切换固定 60 帧」。这里自己数节拍（不走全局帧预算 frameBudget.ts）：
+      // 帧预算是全应用共享的，同一 rAF 里 WaveProgress（页脚那条波形，无条件自转）可能先一步
+      // 占掉名额，放行时刻忽早忽晚 —— 那种不齐比单纯的 60fps 更难看。数自己的节拍则每 16.67ms
+      // 稳定推进一格。
+      // 节拍取**真实流逝时间**（不是写死 dt）：任何刷新率下滑动速度都一致；而 144/180Hz 面板
+      // 上多出来的那两次回调只会把同一段位移重复光栅化，不增加可见信息。
+      // 1.5ms 余量：60.00Hz 显示器相邻回调的差值常在 16.66~16.68 之间抖，卡在 16.667 上会把
+      // 整整一帧（16.7ms）漏掉，看起来就是"每两拍走一格"的顿挫。
+      const prevTs = lastFrameRef.current;
+      if (prevTs !== 0 && ts - prevTs < TICK_MS - TICK_SLACK) {
+        raf = requestAnimationFrame(loop);
+        return;
       }
+      lastWorkRef.current = ts;
+      const clock = clockRef.current!;
+      // 歌词时间 = 墙钟外推 × 1 + 偏移（正 = 歌词提前）。这是每帧唯一的"时间来源"。
+      const ms = clock.now(ts) * 1000 + offsetRef.current;
+      // 左闭右开二分 + 游标：正常播放每帧只挪一步，换歌/拖动时才走线性那几段。
+      // starts 由 layoutLyricLines 保证严格递增（N10），所以二分一定落在正确的一组上。
+      const g = advanceIndex(starts, ms, activeGroupRef.current);
+      const sg = advanceIndex(starts, ms + SCROLL_LEAD_MS, scrollGroupRef.current);
       // 当前这一整句一次性全亮，不跟演唱进度渐变：每帧只判断"当前是第几组"
       if (activeGroupRef.current !== g) {
         activeGroupRef.current = g;
         setActiveGroup(g);
       }
-      // 弹簧积分（半隐式欧拉 + 两次子步，ζ>1 时足够稳）
-      const dt = lastFrameRef.current ? Math.min(SPRING_DT_MAX, ts - lastFrameRef.current) : 16.7;
+      // 滚动目标提前一步换（见 SCROLL_LEAD_MS）：两个 setState 在同一帧提交，只多一次渲染
+      if (scrollGroupRef.current !== sg) {
+        scrollGroupRef.current = sg;
+        setScrollGroup(sg);
+      }
       lastFrameRef.current = ts;
-      {
-        const half = dt / 2000;
-        for (let s = 0; s < 2; s++) {
-          const dx = yRef.current - baseYRef.current;
-          const acc = -SPRING_K * dx - SPRING_C * vRef.current;
-          let v = vRef.current + acc * half;
-          if (v > SPRING_VMAX) v = SPRING_VMAX;
-          else if (v < -SPRING_VMAX) v = -SPRING_VMAX;
-          vRef.current = v;
-          yRef.current += v * half;
-          if (Math.abs(yRef.current - baseYRef.current) < 0.2 && Math.abs(vRef.current) < 8) {
-            yRef.current = baseYRef.current;
-            vRef.current = 0;
-            break;
+      // ===== 位移：固定时长补间（到点硬停，没有弹簧那条像素阶梯尾巴）=====
+      // 目标一改（换句 / 尺寸变化 / 拖动后重算基准）就从头起一段，起点取**当前视觉位置**，
+      // 所以补间途中改目标也不会跳；到点把 y 直接写成目标值并清掉 tween ⇒ 之后一帧都不再动。
+      if (snapPendingRef.current) {
+        // 跳变帧（拖动进度 / 换歌 / 卡顿追帧）：直接落位，不滚。
+        // 让"我刚点了这一句"立刻成立，而不是看着整列追过去（文档 §10.2.3）。
+        snapPendingRef.current = false;
+        tweenRef.current = null;
+        yRef.current = baseYRef.current;
+      } else {
+        const base = baseYRef.current;
+        let tw = tweenRef.current;
+        if (Math.abs(base - yRef.current) > 0.01 && (!tw || Math.abs(tw.to - base) > 0.01)) {
+          tw = tweenRef.current = startTween(yRef.current, base, ts);
+        }
+        if (tw) {
+          const p = (ts - tw.start) / tw.dur;
+          if (p >= 1) {
+            yRef.current = tw.to;
+            tweenRef.current = null;
+          } else {
+            const inv = 1 - p;
+            yRef.current = tw.from + (tw.to - tw.from) * (1 - inv * inv * inv);
           }
         }
       }
+
       const ret = wheelReturnRef.current;
       if (ret) {
         const p = (ts - ret.start) / WHEEL_RETURN_MS;
@@ -480,36 +934,12 @@ export function LyricsPage() {
           wheelYRef.current = ret.from * (1 - p);
         }
       }
-      // 逐句扫过（规范 I.3 的 gradientPercentage）：只给当前这一组的原文行写一个
-      // --sl-k 变量，CSS 用 background-clip:text 把它变成"已唱 / 未唱"的界线。
-      // 不 setState、不重建 DOM —— 每帧只是一条 style.setProperty。
-      if (karaokeRef.current) {
-        const el = karaokeRef.current;
-        if (el.group !== g) {
-          if (el.node) el.node.style.removeProperty("--sl-k");
-          // 注意：不能引用下面的 const track —— 那行在本块之后声明，同作用域里先读会 TDZ 报错，
-          // rAF 循环会当场死掉（曾因此整列歌词不滚、--sl-k 也永远为空）。
-          const gEl = trackRef.current?.children[g] as HTMLElement | undefined;
-          el.node = (gEl?.querySelector(".sl-line:not(.is-tr)") as HTMLElement | null) ?? null;
-          el.group = g;
-          el.k = -1;
-        }
-        if (el.node) {
-          const t0 = groups[g] ? lines[groups[g][0]].timeMs : 0;
-          const t1 =
-            groups[g + 1] && lines[groups[g + 1][0]]
-              ? lines[groups[g + 1][0]].timeMs
-              : t0 + LAST_LINE_MS;
-          // 扫过的时长取「本句到下一句」的间隔，但夹在 0.9s–4.5s：
-          // 前奏/间奏里一句歌词可能挂着十几秒，按真实间隔扫会慢得像没在动。
-          const swept = Math.max(950, Math.min(4300, t1 - t0));
-          const k = Math.max(0, Math.min(1, (ms - t0) / swept));
-          if (Math.abs(k - el.k) > 0.004 || k === 1) {
-            el.k = k;
-            el.node.style.setProperty("--sl-k", k.toFixed(3));
-          }
-        }
-      }
+      // 逐字扫过已去掉（2026-11）：原来每帧给当前句写一个 --sl-k，让"已唱 / 未唱"的
+      // 界线从左往右推。问题是这句用来扫的时长只能按"本句到下一句"的间隔去猜（见
+      // 旧实现的 950–4300ms 夹取），前奏/间奏一长就完全对不上：歌还没唱，界线已经在
+      // 句子里走了 —— 看起来就是"前奏期间歌词自己在走"。
+      // 现在只认时间戳：唱到哪一句，那一整句一次性全亮（.sl-g.is-active），
+      // 句子内部不再有渐变，也就不需要每帧写 DOM 了。
       const track = trackRef.current;
       if (track) {
         // 按设备像素对齐：小数位移会让整列文字落在亚像素位置，渲染发虚
@@ -519,61 +949,43 @@ export function LyricsPage() {
           track.style.transform = "translate3d(0," + px + "px,0)";
         }
       }
+      // ===== 停帧判据（P0-a 的核心）=====
+      // ① 窗口不可见（最小化 / 收进托盘 / document.hidden）：整窗不在屏幕上，
+      //    继续算只是在让合成器持续被唤醒。真正的 cancelAnimationFrame，不是回调里早退。
+      if (isWindowInvisible()) {
+        stop();
+        return;
+      }
+      // ② 暂停 + 补间已走完 + 没有滚轮回位在跑：画面已经不会再变了。
+      //    位置/状态变化、滚轮、基准位重算、重新可见都会走 wake() 回来。
+      if (
+        !clock.playing &&
+        !tweenRef.current &&
+        wheelYRef.current === 0 &&
+        !wheelReturnRef.current &&
+        Math.abs(yRef.current - baseYRef.current) < 0.01
+      ) {
+        stop();
+        return;
+      }
       raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [open, lyrics, groups]);
-
-  // 居中基准：把「当前这一组」的中心对到歌词区的垂直中心。
-  // 歌词区的下边界就是播放条上沿（见 lyrics.css 的 .sl-lyrics-area），所以这里不再补偿偏移量。
-  useLayoutEffect(() => {
-    const box = lyricsBoxRef.current;
-    const track = trackRef.current;
-    if (!box || !track) return;
-    // 前奏期间（activeGroup 还是 -1）先按第一句居中，歌词才不会贴着顶端加载出来
-    const gi = activeGroup >= 0 ? activeGroup : track.children.length > 0 ? 0 : -1;
-    const active = gi >= 0 ? (track.children[gi] as HTMLElement | undefined) : undefined;
-    const offset = active ? active.offsetTop + active.offsetHeight / 2 - box.clientHeight / 2 : 0;
-    baseYRef.current = -offset;
-    if (!yReadyRef.current) {
-      // 首次进入直接落位，不滚动
-      yRef.current = baseYRef.current;
-      vRef.current = 0;
-      lastFrameRef.current = 0;
-      yReadyRef.current = true;
     }
-    // 当前句字号是 280ms 过渡放大的，上面量到的是**放大前**的高度 → 目标位会稳定偏下半个高差。
-    // 过渡结束后再对一次中心（改的是 baseY，弹簧自己滑过去，不会瞬移）。
-    const settle = window.setTimeout(() => {
-      const bx = lyricsBoxRef.current;
-      const tr = trackRef.current;
-      if (!bx || !tr) return;
-      const cur = activeGroupRef.current;
-      const idx = cur >= 0 ? cur : tr.children.length > 0 ? 0 : -1;
-      const el = idx >= 0 ? (tr.children[idx] as HTMLElement | undefined) : undefined;
-      if (!el) return;
-      baseYRef.current = -(el.offsetTop + el.offsetHeight / 2 - bx.clientHeight / 2);
-    }, 320);
-    return () => window.clearTimeout(settle);
-  }, [activeGroup, lyrics, open]);
-
-  // 尺寸变化（拖窗口 / 进出最大化 / 字号切换）后歌词区高度变了，基准要重量一次。
-  // 不动 yRef，交给弹簧自己滑过去，避免瞬移。
-  useEffect(() => {
-    const box = lyricsBoxRef.current;
-    if (!box || !open) return;
-    const ro = new ResizeObserver(() => {
-      const track = trackRef.current;
-      const cur = activeGroupRef.current;
-      const gi = track && cur < 0 && track.children.length > 0 ? 0 : cur;
-      const active = track && gi >= 0 ? (track.children[gi] as HTMLElement | undefined) : undefined;
-      if (!active) return;
-      baseYRef.current = -(active.offsetTop + active.offsetHeight / 2 - box.clientHeight / 2);
+    // 合并信号：document.visibilitychange 与 Tauri 的 win-hidden（最小化/托盘）。
+    // 恢复可见时 wake() 立刻补一帧 —— 隐藏期间位置事件照常进来，
+    // 这一帧会把当前句和位移一次性对齐，不会停在旧画面上。
+    const offVisibility = onWindowVisibilityChange(() => {
+      if (isWindowInvisible()) stop();
+      else wake();
     });
-    ro.observe(box);
-    return () => ro.disconnect();
-  }, [open]);
+    raf = requestAnimationFrame(loop);
+    kickRef.current = wake;
+    return () => {
+      alive = false;
+      kickRef.current = null;
+      offVisibility();
+      stop();
+    };
+  }, [open, lyrics, starts]);
 
   // 滚轮：手动浏览歌词（松手 2.6s 后自动回到当前句）
   useEffect(() => {
@@ -589,9 +1001,11 @@ export function LyricsPage() {
       wheelYRef.current = Math.max(-span, Math.min(span, wheelYRef.current - step));
       if (wheelTimer.current !== null) window.clearTimeout(wheelTimer.current);
       wheelReturnRef.current = null; // 有新滚动输入则取消回位
+      kickRef.current?.(); // 暂停且已停帧时，滚轮是唯一的唤醒源
       wheelTimer.current = window.setTimeout(() => {
         wheelReturnRef.current = { from: wheelYRef.current, start: performance.now() };
         setBlurOff(false); // 回到当前句后恢复模糊
+        kickRef.current?.(); // 回位补间需要一个在跑的循环
       }, 2600);
     };
     box.addEventListener("wheel", onWheel, { passive: false });
@@ -703,6 +1117,51 @@ export function LyricsPage() {
     [lines, lineProfiles, stacks, fontEpoch]
   );
 
+  /** 影响行高的输入（字体链 / 逐行档案 / 字号设置）变了，缓存的组顶坐标就要作废 */
+  const geoEpoch = useMemo(() => ({}), [lineStacks, lineProfiles, songProfile, settingsValues]);
+
+  // 居中基准：把「当前这一组」的中心对到歌词区的垂直中心。
+  // 歌词区的下边界就是播放条上沿（见 lyrics.css 的 .sl-lyrics-area），所以这里不再补偿偏移量。
+  useLayoutEffect(() => {
+    const box = lyricsBoxRef.current;
+    const track = trackRef.current;
+    if (!box || !track) return;
+    // 前奏期间（还没有当前句）先按第一句居中，歌词才不会贴着顶端加载出来。
+    // 组中心与"是否放大"无关（高度锁死、放大绕中心溢出，见 layoutTrack），
+    // 所以这里不需要区分 lead：切句的目标位置是恒定的，落位后不会被顶第二次。
+    const gi = scrollGroup >= 0 ? scrollGroup : track.children.length > 0 ? 0 : -1;
+    if (gi < 0) return;
+    baseYRef.current = centerTargetFor(track, box, gi, topsRef, geoEpoch);
+    kickRef.current?.();
+    if (!yReadyRef.current || snapPendingRef.current) {
+      // 首次进入 / 换歌 / 进度跳变：直接落位，不滚动（文档 §10.2.3）
+      snapPendingRef.current = false;
+      yRef.current = baseYRef.current;
+      tweenRef.current = null;
+      lastFrameRef.current = 0;
+      lastPxRef.current = null; // 强制重写 transform：值没变的话下面会跳过这一帧
+      yReadyRef.current = true;
+    }
+  }, [scrollGroup, lyrics, open, geoEpoch]);
+
+  // 尺寸变化（拖窗口 / 进出最大化 / 字号切换）后歌词区高度变了，基准要重量一次。
+  // 不动 yRef，交给补间自己滑过去，避免瞬移。
+  useEffect(() => {
+    const box = lyricsBoxRef.current;
+    if (!box || !open) return;
+    const ro = new ResizeObserver(() => {
+      const track = trackRef.current;
+      const cur = scrollGroupRef.current;
+      const gi = track && cur < 0 && track.children.length > 0 ? 0 : cur;
+      if (!track || gi < 0) return;
+      baseYRef.current = centerTargetFor(track, box, gi, topsRef, geoEpoch);
+      kickRef.current?.(); // 停帧时基准位变了，得叫循环回来滑过去
+    });
+    ro.observe(box);
+    return () => ro.disconnect();
+  }, [open]);
+
+
   // §11「显示实际字体来源」：把每行拆成"主字体出的字"和"回退来的字"，各挂各的链
   const showSource = readShowSource(settingsValues);
   const resourceById = useMemo(() => new Map(fontResources.map((r) => [r.id, r])), [fontResources]);
@@ -732,6 +1191,20 @@ export function LyricsPage() {
       return first ? '"' + fontFamilyName(first) + '", sans-serif' : chain.css;
     },
     [stacks]
+  );
+
+  /**
+   * 点句跳转的唯一出口。抽成稳定引用是为了让 LyricGroup 能 memo：
+   * 每个 <p onClick> 都由子组件自己用 onSeekMs(headMs) 组装，父级不再每次 render 新造箭头函数。
+   */
+  const onSeekMs = useCallback(
+    (ms: number) => {
+      wheelYRef.current = 0;
+      snapPendingRef.current = true; // 点哪句就立刻停在哪句，不给补间滑过去的余地
+      setBlurOff(false); // 点句跳转 = 结束手动浏览，模糊立刻回来
+      void seek(ms / 1000);
+    },
+    [seek]
   );
 
   /**
@@ -868,90 +1341,31 @@ export function LyricsPage() {
               <div className="sl-track" ref={trackRef}>
                 {!synced && <p className="sl-note">纯文本歌词 · 无时间轴</p>}
                 {groups.map((group, gi) => {
-                  // 点哪一行都跳到这一条的演唱时刻：翻译行的时间戳是它出现的时间，
-                  // 不是唱到这一句的时间，拿它 seek 会跳过头。
-                  const headMs = lines[group[0]].timeMs;
+                  // 焦点句：正常就是当前句；前奏期间（activeGroup 还是 -1）取第 0 句，
+                  // 否则开头几十秒所有行都不模糊、alpha 全 1，看着像"模糊没加载出来"
                   const focus = activeGroup >= 0 ? activeGroup : groups.length > 0 ? 0 : -1;
-                  const blur = blurFor(gi, focus);
-                  const alpha = alphaFor(gi, focus);
+                  // 每组的 props 都是原始值或引用稳定的数组（lines / lineRuns / lineProfiles /
+                  // lineStacks / runCss 全部 memo 过）—— 焦点移动时远处那些组浅比较相等，
+                  // LyricGroup 直接跳过渲染，切句只剩焦点附近 ±5 组要重算。
                   return (
-                    // 同一时间戳的多行（原词 + 翻译）作为**一个整体**渲染：
-                    // 模糊、行距、颜色都落在这一层，原词和翻译永远一起变化。
-                    <div
+                    <LyricGroup
                       key={"g" + gi}
-                      className={
-                        "sl-g" +
-                        (gi === activeGroup ? " is-active" : "") +
-                        (focus >= 0 && Math.abs(gi - focus) <= 2 ? " is-near" : "")
-                      }
-                      style={{
-                        // 不加 opacity 过渡：几十行同时起过渡会把每一行都提成独立合成层
-                        opacity: alpha,
-                        filter: blur > 0.05 ? "blur(" + blur.toFixed(2) + "px)" : undefined,
-                      }}
-                    >
-                      {group.map((index, k) => {
-                        const line = lines[index];
-                        // 这一行的档案：字体链按它取，lang 属性同时修中日的汉字字形变体
-                        const profile = lineProfiles[index] ?? "latin";
-                        const runs = lineRuns?.[index] ?? null;
-                        return (
-                          <p
-                            key={index}
-                            // k>0 = 同组里的第二行以后，也就是翻译行（字号 ×0.8）
-                            className={"sl-line" + (k > 0 ? " is-tr" : "") + (synced ? " is-clickable" : "")}
-                            lang={profileLang(profile)}
-                            style={{ fontFamily: lineStacks[index] }}
-                            onClick={
-                              synced
-                                ? () => {
-                                    wheelYRef.current = 0;
-                                    setBlurOff(false); // 点句跳转 = 结束手动浏览，模糊立刻回来
-                                    void seek(headMs / 1000);
-                                  }
-                                : undefined
-                            }
-                          >
-                            {/* 文字包一层 inline 容器：逐句扫过的渐变按"文字宽度"铺，
-                                而不是按整列宽 —— 居中布局下整列 820px 会让 1/4 的行宽打在空白上。
-                                开了「显示实际字体来源」时，这一段会按"主字体 / 回退"再切成几段：
-                                主字体段只挂主字体，缺字段挂整条链 —— 于是眼睛看到的字面来源就是真的。 */}
-                            <span className="sl-in">
-                              {runs
-                                ? runs.map((run, ri) => (
-                                    <span
-                                      key={ri}
-                                      className={"sl-run" + (run.fallback ? " is-fb" : "")}
-                                      style={{ fontFamily: runCss(run) }}
-                                      title={
-                                        run.fallback
-                                          ? "这几个字主字体没有，实际由该语言的系统字体渲染（点开看码位）"
-                                          : "这一段的字来自主字体"
-                                      }
-                                      onClick={
-                                        run.fallback
-                                          ? (e) => {
-                                              // 诊断模式（§7.3）：点回退段给出缺字列表 + 码位，同时别让点击顺带跳转播放
-                                              e.stopPropagation();
-                                              toast(
-                                                "主字体缺这几个字，已回退到系统字体：" +
-                                                  codepointsOf(run.text) +
-                                                  (run.profile === songProfile ? "" : "（" + PROFILES[run.profile].label + "档案）"),
-                                                "info",
-                                              );
-                                            }
-                                          : undefined
-                                      }
-                                    >
-                                      {run.text}
-                                    </span>
-                                  ))
-                                : line.text}
-                            </span>
-                          </p>
-                        );
-                      })}
-                    </div>
+                      indices={group}
+                      lines={lines}
+                      lineRuns={lineRuns}
+                      lineProfiles={lineProfiles}
+                      lineStacks={lineStacks}
+                      songProfile={songProfile}
+                      synced={synced}
+                      active={gi === activeGroup}
+                      // 尺寸强调跟滚动目标，颜色强调跟时间戳（见 SCROLL_LEAD_MS 的注释）
+                      lead={gi === scrollGroup}
+                      near={focus >= 0 && Math.abs(gi - focus) <= 2}
+                      blur={blurFor(gi, focus)}
+                      alpha={alphaFor(gi, focus)}
+                      runCss={runCss}
+                      onSeekMs={onSeekMs}
+                    />
                   );
                 })}
               </div>

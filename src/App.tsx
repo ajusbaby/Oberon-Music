@@ -311,6 +311,19 @@ export default function App() {
   const libStats = useLibraryStore((s) => s.stats);
   const ambientSeed = usePlayerStore((s) => s.state?.current?.album || s.state?.current?.title || "oberon");
   const ambientTrackId = usePlayerStore((s) => s.state?.current?.trackId ?? null);
+  /**
+   * 光雾此刻是否真的在产帧（P0-b）。只有它动起来，压在它上方的播放条/侧栏毛玻璃
+   * 才需要**每帧**重新取背景、重新模糊（没有任何缓存机会）。
+   * HomeAmbient 的循环条件是 `active && playing`（见 HomeAmbient.tsx），所以这里必须
+   * 带上 playing —— 暂停时它只是 renderOnce 的一张静止图，玻璃可以原样留着。
+   */
+  const ambientLive =
+    ambientOn &&
+    playing &&
+    view.name === "home" &&
+    (libStats?.trackCount ?? 0) > 0 &&
+    !lyricsOpen &&
+    !winHidden;
 
   return (
     <div
@@ -319,7 +332,8 @@ export default function App() {
         (maximized ? " maximized" : "") +
         (playing ? " playing" : "") +
         (focused ? "" : " win-blur") +
-        (winHidden ? " win-hidden" : "")
+        (winHidden ? " win-hidden" : "") +
+        (ambientLive ? " ambient-live" : "")
       }
     >
       {/* 首页氛围背景：z-index:-1 落在外壳底色之上、所有内容之下，由半透明毛玻璃"霜化" */}
