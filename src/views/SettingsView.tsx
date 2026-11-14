@@ -70,6 +70,11 @@ const MODES: { key: PlayMode; label: string }[] = [
   { key: "shuffle", label: "随机播放" },
 ];
 
+const FPS_OPTIONS = [
+  { value: "off", label: "60 帧" },
+  { value: "on", label: "跟随屏幕" },
+];
+
 export function SettingsView() {
   const refreshStats = useLibraryStore((s) => s.refreshStats);
   const folders = useLibraryStore((s) => s.folders);
@@ -82,6 +87,10 @@ export function SettingsView() {
   // 首页氛围背景开关（默认开启；关闭后组件完全卸载，0 开销）
   const ambientOn = settings["homeAmbient"] !== "off";
   const setSetting = useSettingsStore((s) => s.set);
+
+  // 歌词切句节拍：默认固定 60 帧；打开后每个屏幕刷新周期都推进（吃满显示器刷新率）。
+  // 白名单解码（=== "on"）：缺键必须落到默认「60 帧」。
+  const maxFps = settings["lyricMaxFps"] === "on";
   const playerVolume = usePlayerStore((s) => s.state?.volume ?? 70);
   const setVolume = usePlayerStore((s) => s.setVolume);
   const setPlayMode = usePlayerStore((s) => s.setPlayMode);
@@ -849,6 +858,26 @@ export function SettingsView() {
               >
                 <Icon name="refresh" />
               </button>
+            </div>
+          </div>
+          <div className="lf-row">
+            <div className="lf-label">帧率</div>
+            <div className="lf-options">
+              {FPS_OPTIONS.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  className={"chip lf-chip" + ((maxFps ? "on" : "off") === o.value ? " active" : "")}
+                  onClick={() => void setSetting("lyricMaxFps", o.value)}
+                >
+                  {o.label}
+                </button>
+              ))}
+              <span className="lf-hint">
+                {maxFps
+                  ? "每个屏幕刷新周期都推进一格（180Hz 屏 = 180 帧）；切句瞬间 GPU 占用约为 60 帧的 2 倍"
+                  : "每 16.7ms 推进一格。屏幕刷新率高于 60Hz 时可改成「跟随屏幕」，位移采样更细"}
+              </span>
             </div>
           </div>
         </div>

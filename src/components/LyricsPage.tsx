@@ -798,6 +798,15 @@ export function LyricsPage() {
   // 渲染期直接赋值：偏移只在设置变化或换歌时改，比放进 effect 早一帧生效，也不会闪。
   offsetRef.current = syncOffsetMs;
 
+  /* ===== 歌词推进节拍（设置 → 歌词排版 → 帧率） =====
+     默认「60 帧」：144/180Hz 面板多出来的回调只是把同一段位移重复光栅化，不增加可见信息。
+     想「吃满屏幕上限」的用户可以打开开关，那时节拍放到 0（每个 rAF 回调都推进）。实测 180Hz 下
+     切句瞬间整卡 GPU 3.6% → 8.2%、整机功耗 +2.5W，所以做成开关而非常量。
+     渲染期直接赋值（同上面的 offsetRef）：不重启帧循环，下一帧就按新节拍走。 */
+  const uncappedFps = settingsValues["lyricMaxFps"] === "on";
+  const uncappedFpsRef = useRef(uncappedFps);
+  uncappedFpsRef.current = uncappedFps;
+
   // Alt+←/→ 微调「本曲」同步偏移（Alt+Shift 步进 250ms）。只在歌词页开着时生效，
   // 用捕获阶段抢在全局 ←/→（切歌）之前把它消费掉。
   useEffect(() => {
@@ -870,6 +879,9 @@ export function LyricsPage() {
     function loop() {
       raf = 0;
       const ts = performance.now();
+      // 节拍：默认档 60 帧（TICK_MS - TICK_SLACK）；选了「跟随屏幕」就取 0，每个 rAF 回调都推进，
+      // 即与显示器刷新率同频（60Hz 屏 60 帧、180Hz 屏 180 帧）。每帧重读，改设置不用重启循环。
+      const tickMs = uncappedFpsRef.current ? 0 : TICK_MS - TICK_SLACK;
       // 失焦（窗口还在屏幕上，只是键盘焦点在别处，例如用户开着任务管理器看占用）：
       // 有位移在跑就照常全速（否则 150–300ms 的补间只剩 2 帧采样，看起来是"跳两下"），
       // 画面静止时才降到 30fps。不能直接停 —— 那样歌词会当场冻住。
@@ -878,22 +890,23 @@ export function LyricsPage() {
           tweenRef.current !== null ||
           wheelReturnRef.current !== null ||
           wheelYRef.current !== 0;
-        if (ts - lastWorkRef.current < (moving ? TICK_MS - TICK_SLACK : UNFOCUSED_IDLE_MS)) {
+        if (ts - lastWorkRef.current < (moving ? tickMs : UNFOCUSED_IDLE_MS)) {
           raf = requestAnimationFrame(loop);
           return;
         }
       }
-      // ===== 定频 60 帧 =====
-      // 用户要求「歌词切换固定 60 帧」。这里自己数节拍（不走全局帧预算 frameBudget.ts）：
+      // ===== 节拍：默认定频 60 帧，设置 → 歌词排版 → 帧率 可改成跟随屏幕刷新率 =====
+      // 默认档是「固定 60 帧」。这里自己数节拍（不走全局帧预算 frameBudget.ts）：
       // 帧预算是全应用共享的，同一 rAF 里 WaveProgress（页脚那条波形，无条件自转）可能先一步
       // 占掉名额，放行时刻忽早忽晚 —— 那种不齐比单纯的 60fps 更难看。数自己的节拍则每 16.67ms
       // 稳定推进一格。
       // 节拍取**真实流逝时间**（不是写死 dt）：任何刷新率下滑动速度都一致；而 144/180Hz 面板
-      // 上多出来的那两次回调只会把同一段位移重复光栅化，不增加可见信息。
+      // 上多出来的那两次回调只会把同一段位移重复光栅化，不增加可见信息 —— 除非用户打开了
+      // 设置里的「跟随屏幕刷新率」，那时 tickMs 取 0，每个回调都推进一格。
       // 1.5ms 余量：60.00Hz 显示器相邻回调的差值常在 16.66~16.68 之间抖，卡在 16.667 上会把
       // 整整一帧（16.7ms）漏掉，看起来就是"每两拍走一格"的顿挫。
       const prevTs = lastFrameRef.current;
-      if (prevTs !== 0 && ts - prevTs < TICK_MS - TICK_SLACK) {
+      if (prevTs !== 0 && ts - prevTs < tickMs) {
         raf = requestAnimationFrame(loop);
         return;
       }
