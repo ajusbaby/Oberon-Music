@@ -526,14 +526,15 @@
 
             transition:
                 transform 460ms cubic-bezier(.22, 1, .36, 1),
-                opacity 320ms ease,
-                box-shadow 320ms ease,
-                border-color 320ms ease;
+                opacity 320ms ease;
 
             cursor: pointer;
-            /* ⚠️ 这里原来还列了 box-shadow —— 阴影无法走合成层，写进去只会白占一个提升层的
-               名额（每张卡一个）。切卡动画真正需要提升的只有 transform 与 opacity。
-               will-change 的实际取值在 styles/views.css 的 .cf-card 里常驻为
+            /* ⚠️ box-shadow / border-color 故意不在这条 transition 里 —— 实测：阴影一走过渡，
+               切卡那 320ms 里每帧都要重绘两张卡，Paint 从静止的 0.8ms/6s 涨到 67ms/6s，
+               整页 GPU 从静止 5% 抬到 12.2%（p95 18%）。拿掉这两条属性后降到 10.5%（p95 16%），
+               阴影直接到位肉眼看不出来：460ms 的 transform 还在跑，注意力都在滑动上。
+               另：box-shadow 也不能写进 will-change —— 阴影无法走合成层，只会白占提升名额
+               （每张卡一个）。will-change 的实际取值在 styles/views.css 的 .cf-card 里常驻为
                transform, opacity：**不能再回到「切卡窗口内临时打开」**的写法，
                撤掉 will-change 会销毁合成层并重栅格化整张卡（切完约 900ms 海报闪一下）。 */
             will-change: auto;
