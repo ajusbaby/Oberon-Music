@@ -98,6 +98,18 @@ const IMMERSIVE_DELAY = 3200;
 const TICK_MS = 1000 / 60;
 /** 节拍余量：小于 (TICK_MS - TICK_SLACK) 的回调直接跳过，避免漏帧 */
 const TICK_SLACK = 1.5;
+/**
+ * 窗口失焦（键盘焦点在别的窗口 —— 比如用户开着任务管理器看占用）时的空闲节拍：30fps。
+ *
+ * 2026-11 修：这里原来是 90ms（~11fps），理由"失焦就少烧点 CPU"。但整列位移是 150–300ms 的
+ * 补间，11fps 一条补间只采样到 **2 帧**（CDP 实测：切句窗口内只有 2 次写 DOM，写入间隔 p50
+ * 94.6ms），肉眼就是"歌词一次跳两下"，用户报的"打开任务管理器歌词就卡"正是它 —— 任务管理器
+ * 一抢焦点，这里立刻掉到 11fps，关掉就恢复 60fps。
+ * 现在：**有东西在动**（补间 / 滚轮回位）就按 TICK_MS 全速跑，静止时才降到 30fps；
+ * 一条 220ms 的补间在 30fps 下有 6~7 帧，位移仍然平滑，而失焦时每帧的开销本来只是
+ * 一次二分 + 一次比较。暂停 + 静止仍然整段停帧（见循环末尾的 ② 判据）。
+ */
+const UNFOCUSED_IDLE_MS = 1000 / 30;
 /** 换句位移的最短 / 最长时间：太短会一窜，太长会让下一句的提前量吃紧 */
 const SCROLL_MIN_MS = 150;
 const SCROLL_MAX_MS = 300;
@@ -858,11 +870,18 @@ export function LyricsPage() {
     function loop() {
       raf = 0;
       const ts = performance.now();
-      // 失焦（窗口还在屏幕上，只是键盘焦点在别处）：降到 ~11fps。
-      // 不能直接停 —— 那样歌词会当场冻住，而用户常常一边看一边在别的窗口打字。
-      if (!isWinFocused() && ts - lastWorkRef.current < 90) {
-        raf = requestAnimationFrame(loop);
-        return;
+      // 失焦（窗口还在屏幕上，只是键盘焦点在别处，例如用户开着任务管理器看占用）：
+      // 有位移在跑就照常全速（否则 150–300ms 的补间只剩 2 帧采样，看起来是"跳两下"），
+      // 画面静止时才降到 30fps。不能直接停 —— 那样歌词会当场冻住。
+      if (!isWinFocused()) {
+        const moving =
+          tweenRef.current !== null ||
+          wheelReturnRef.current !== null ||
+          wheelYRef.current !== 0;
+        if (ts - lastWorkRef.current < (moving ? TICK_MS - TICK_SLACK : UNFOCUSED_IDLE_MS)) {
+          raf = requestAnimationFrame(loop);
+          return;
+        }
       }
       // ===== 定频 60 帧 =====
       // 用户要求「歌词切换固定 60 帧」。这里自己数节拍（不走全局帧预算 frameBudget.ts）：

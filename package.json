@@ -1,7 +1,7 @@
 {
   "name": "oberon",
   "private": true,
-  "version": "0.4.17",
+  "version": "0.4.18",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -15,7 +15,8 @@
     "check:font": "node scripts/font-logic.mjs",
     "check:frame": "node scripts/frame-budget.mjs",
     "check:lyrics": "node scripts/check-lyrics.mjs",
-    "check:engine": "node scripts/check-engine.mjs"
+    "check:engine": "node scripts/check-engine.mjs",
+    "check:paint": "node scripts/check-paint.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
