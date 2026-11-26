@@ -182,3 +182,9 @@ CUE 整轨分轨（一张图 + .cue 拆成多轨）也不支持。
 
 - **Salt Player**（Moriafly 出品的 Android 本地音乐播放器）—— 歌词页背景的视觉设计参考了它：
   封面高斯模糊铺底 + 暗化遮罩 + 逐行浮起的歌词。Oberon 是独立实现（纯 CSS 模糊层 + React 行渲染）。
+
+## 开源协议
+
+MIT License —— 谁都能用：商用、修改、闭源再发布、打包进自己的产品都行，只要保留版权声明与许可声明。全文见 [LICENSE](LICENSE)。
+
+仓库：<https://github.com/ajusbaby/Oberon-Music>

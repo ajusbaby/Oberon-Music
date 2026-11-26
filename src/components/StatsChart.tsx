@@ -45,7 +45,7 @@ export function StatsChart({ buckets }: StatsChartProps) {
               <>
                 <span className="stats-chart-readout-title">{hovered.title}</span>
                 <span className="stats-chart-readout-item">{fmtDuration(hovered.secs)}</span>
-                <span className="stats-chart-readout-item">{hovered.plays} 次播放</span>
+                <span className="stats-chart-readout-item">{hovered.plays} 次听完</span>
                 <span className="stats-chart-readout-item">{hovered.tracks} 首曲目</span>
               </>
             )
@@ -70,7 +70,7 @@ export function StatsChart({ buckets }: StatsChartProps) {
           // 无障碍信息留在 aria-label 里，读屏器和键盘焦点都还能拿到。
           const label = empty
             ? b.title + "：没有记录"
-            : b.title + "：" + fmtDuration(b.secs) + "，播放 " + b.plays + " 次";
+            : b.title + "：" + fmtDuration(b.secs) + "，听完 " + b.plays + " 次";
           return (
             <button
               key={b.key}

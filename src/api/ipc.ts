@@ -76,7 +76,7 @@ export async function libraryStats(): Promise<LibraryStats> {
 export async function tracksList(filter: TrackFilter = {}): Promise<Paginated<Track>> {
   return invoke("tracks_list", { filter });
 }
-/** 播放次数 +1。曲目**真正开始播放**时由 playerStore 调一次（见那里的播放计数）。 */
+/** 播放次数 +1。只在**完整听完一首**时调用一次（listenLog 的 countCompletion），与统计页同口径。 */
 export async function trackPlayed(id: number): Promise<void> {
   return invoke("track_played", { id });
 }

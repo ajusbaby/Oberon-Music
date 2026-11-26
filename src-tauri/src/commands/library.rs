@@ -19,7 +19,7 @@ pub async fn tracks_list(state: State<'_, Arc<AppState>>, filter: TrackFilter) -
     db_run(db, move |c| crate::db::list_tracks(c, &filter)).await
 }
 
-/// 播放次数 +1。前端在曲目**真正开始播放**时调用一次（见 playerStore 的播放计数）。
+/// 播放次数 +1。前端在**完整听完一首**时调用一次（listenLog 的 countCompletion），与统计页同口径。
 #[tauri::command]
 pub async fn track_played(state: State<'_, Arc<AppState>>, id: i64) -> AppResult<()> {
     let db = state.db.clone();

@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS tracks (
     file_mtime   INTEGER NOT NULL DEFAULT 0,        -- 文件修改时间（秒），扫描去重用
     added_ms     INTEGER NOT NULL DEFAULT 0,
     modified_ms  INTEGER NOT NULL DEFAULT 0,
-    play_count   INTEGER NOT NULL DEFAULT 0          -- 播放次数（按它排序；只在真正开始播放时自增）
+    play_count   INTEGER NOT NULL DEFAULT 0          -- 播放次数（按它排序；只在完整听完一首时自增）
 );
 
 CREATE TABLE IF NOT EXISTS folders (
@@ -244,7 +244,7 @@ pub fn delete_track_by_id(conn: &Connection, id: i64) -> AppResult<()> {
     Ok(())
 }
 
-/// 播放次数 +1。曲目**真正开始播放**时由前端调用（见 playerStore 的播放计数）。
+/// 播放次数 +1。曲目**完整听完**时由前端调用一次（见 listenLog 的 countCompletion）。
 /// ⚠️ 刻意不动 modified_ms：播放不是「内容被改动」，不该影响任何按修改时间的显示/排序。
 pub fn bump_play_count(conn: &Connection, id: i64) -> AppResult<()> {
     conn.execute("UPDATE tracks SET play_count = play_count + 1 WHERE id = ?1", params![id])?;

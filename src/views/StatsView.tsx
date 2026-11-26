@@ -1,4 +1,4 @@
-// 统计页：本周 / 本月 / 本年 / 总共 四档，区间大字号总时长 + 柱状图 + 两项指标 + 歌曲明细。
+// 统计页：本周 / 本月 / 本年 / 总共 四档，区间大字号总时长 + 柱状图 + 歌曲明细。
 // 数据全部来自 src/lib/listenLog.ts 的本机日志，前端聚合，不碰后端。
 import { useCallback, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -21,7 +21,6 @@ import {
 const BACKUP_FILTERS = [{ name: "Oberon 听歌统计", extensions: ["json"] }];
 
 const fmtSecs = (n: number) => fmtDurationLong(n);
-const fmtCount = (n: number) => String(Math.round(n));
 
 export function StatsView() {
   const [scope, setScope] = useState<Scope>("week");
@@ -85,21 +84,6 @@ export function StatsView() {
 
           <StatsChart key={scope} buckets={summary.buckets} />
 
-          <div className="stats-metrics">
-            <div className="stats-metric">
-              <div className="stats-metric-label">听歌数</div>
-              <div className="stats-metric-value">
-                <AnimatedNumber key={scope + "-plays"} value={summary.totalPlays} format={fmtCount} />
-              </div>
-            </div>
-            <div className="stats-metric">
-              <div className="stats-metric-label">收听天数</div>
-              <div className="stats-metric-value">
-                <AnimatedNumber key={scope + "-days"} value={summary.activeDays} format={fmtCount} />
-              </div>
-            </div>
-          </div>
-
           {hasData ? (
             <>
               <div className="stats-songs-head">
@@ -111,7 +95,9 @@ export function StatsView() {
           ) : (
             <div className="stats-empty">
               <div className="stats-empty-title">这段时间还没有记录</div>
-              <div className="stats-empty-desc">开始播放之后，这里的时长、次数和歌曲明细会自动出现。</div>
+              <div className="stats-empty-desc">
+                完整听完一首才算一次，只听了个开头的不计次数；时长会照常累计。
+              </div>
             </div>
           )}
         </section>
@@ -119,6 +105,7 @@ export function StatsView() {
         <div className="stats-footnote">
           记录只在本机，不上传、不联网。每次记录都会同时写进应用数据目录和
           「文档\Oberon\听歌统计」，卸载重装、换机器之后都能并回来。
+          次数按完整听完计，早年按「点了播放」记下的历史数据保留原样。
           <span className="stats-footnote-actions">
             <button type="button" className="stats-footnote-btn" disabled={restoring} onClick={() => void restore()}>
               {restoring ? "恢复中…" : "从备份恢复"}

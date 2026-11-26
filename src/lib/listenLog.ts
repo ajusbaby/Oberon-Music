@@ -1,6 +1,6 @@
 // 收听日志：统计模块的唯一数据源。
 // 后端 tracks 表只有累计 play_count、没有任何时间戳，所以「日 / 周 / 月 / 年」的时间序列
-// 只能由前端自己记账：真正播放的秒数按进度事件的差值累加，每开播一首记一次。
+// 只能由前端自己记账：真正播放的秒数按进度事件的差值累加；一首歌**完整听完**才算一次。
 //
 // 账本落在哪：**Rust 侧的 listening.json**（app_data 一份、文档目录镜像一份），
 // localStorage 只当作「进程猝死前的快速缓存」。这么分是因为 localStorage 住在 WebView2 的
@@ -16,7 +16,7 @@ import * as api from "../api/ipc";
 /** 统计区间：本周 / 本月 / 本年 / 总共 */
 export type Scope = "week" | "month" | "year" | "all";
 
-/** 单曲当天的一格账：[开播次数, 收听秒数]（用数组而不是对象，省一半体积） */
+/** 单曲当天的一格账：[完整听完的次数, 收听秒数]（用数组而不是对象，省一半体积） */
 export type TrackDay = [plays: number, secs: number];
 
 /** 曲目的稳定身份：路径规范化后的 FNV-1a 64，16 位小写十六进制 */
@@ -32,11 +32,11 @@ export interface TrackMeta {
   dur: number;
 }
 
-/** 一天的账：秒数、开播次数、逐曲账 */
+/** 一天的账：秒数、完整听完的次数、逐曲账 */
 export interface DayCount {
   /** 真正听过的秒数（暂停、拖进度条、切歌都不计） */
   s: number;
-  /** 开播次数 */
+  /** 完整听完的次数（只听了开头就切走的不算） */
   p: number;
   /** trackKey → [次数, 秒数]；超过 MAX_TRACKS_PER_DAY 时淘汰听得最少的 */
   t: Record<string, TrackDay>;
@@ -67,7 +67,7 @@ export interface ScopeSummary {
   buckets: Bucket[];
   /** 区间内的总收听秒数 */
   totalSecs: number;
-  /** 区间内的开播次数 */
+  /** 区间内完整听完的次数 */
   totalPlays: number;
   /** 有记录的自然日数（收听天数） */
   activeDays: number;
@@ -79,7 +79,7 @@ export interface ScopeSummary {
   toKey: string;
 }
 
-/** 单曲在某个区间内的合计：听了多久、听过几次 */
+/** 单曲在某个区间内的合计：听了多久、完整听完几次 */
 export interface TrackTotal {
   key: TrackKey;
   secs: number;
@@ -497,7 +497,8 @@ function trimTracks(day: DayCount): void {
   keys.sort((a, b) => {
     const x = day.t[a];
     const y = day.t[b];
-    return x[1] + x[0] * 60 - (y[1] + y[0] * 60);
+    // 秒数为主，完整听完一次额外加权：次数现在很稀有，别把真听完的曲子先淘汰掉
+    return x[1] + x[0] * 120 - (y[1] + y[0] * 120);
   });
   for (const key of keys.slice(0, keys.length - MAX_TRACKS_PER_DAY)) delete day.t[key];
 }
@@ -528,40 +529,133 @@ function keyFor(identity: TrackIdentity): string | null {
   return trackKeyOf(identity.path);
 }
 
-/** 一首刚开始播：次数 +1，逐曲次数 +1，立刻落盘 */
-export function recordPlay(identity: TrackIdentity): void {
-  const key = keyFor(identity);
-  if (!key) return;
-  rememberMeta(key, identity);
+/** 当前这一次「连续收听」：暂停继续算同一次，切歌 / 单曲循环重来才算新的一次 */
+interface ListenSession {
+  trackId: number;
+  key: string;
+  /** 这一次真的听过的秒数（只有 0.05~3 秒的向前小步才累加） */
+  secs: number;
+  /** 上一帧的播放位置，用来算差值；拖进度条只改它、不加秒 */
+  pos: number;
+  /** 曲目时长（秒）；0 = 还不知道，这种情况永远不算听完 */
+  dur: number;
+  /** 这一遍已经记过「完整听完」，同一次收听里不重复记 */
+  counted: boolean;
+}
+
+let session: ListenSession | null = null;
+
+/**
+ * 「完整听完」的判定余量（秒）。
+ * 进度事件约 800ms 一次，最后一帧常常停在时长前 0.3~0.8 秒，卡在等于时长上永远等不到，
+ * 所以留一点量化余量；短曲按比例收紧（3 秒的小曲子只听了 2 秒不算）。
+ */
+function completeTolerance(dur: number): number {
+  return Math.min(2, Math.max(0.4, dur * 0.05));
+}
+
+function durationOf(identity: TrackIdentity, key: string): number {
+  if (identity.durationSecs && identity.durationSecs > 0) return identity.durationSecs;
+  return live.tracks[key]?.dur ?? 0;
+}
+
+/** 记一次「完整听完」：区间次数 +1 并立刻落盘，曲库的累计播放次数同口径 +1 */
+function countCompletion(s: ListenSession): void {
+  s.counted = true;
   const day = ensureDay(dayKey(new Date()));
   day.p += 1;
-  trackCell(day, key)[0] += 1;
+  trackCell(day, s.key)[0] += 1;
   trimTracks(day);
   localWrites += 1;
   dirty = true;
   bindLifecycle();
   flush();
+  // 曲库里的 play_count 也只认完整听完，音乐库按「播放次数」排序才和统计页同一口径
+  void api.trackPlayed(s.trackId).catch(() => undefined);
 }
 
-let lastTrackId: number | null = null;
-let lastPos = 0;
+/** 收尾当前会话：真的听满了整首才记一次，只听了开头就切走的不算 */
+function settleSession(): void {
+  const s = session;
+  session = null;
+  if (!s || s.counted) return;
+  if (s.dur > 0 && s.secs >= s.dur - completeTolerance(s.dur)) countCompletion(s);
+}
+
+/**
+ * 一首歌开始了：记下曲目信息，并开一段新的收听会话（**这里不计数**）。
+ * 计数发生在 settleSession / noteProgress 里 —— 累计听满整首时长才算一次。
+ */
+export function noteTrackStart(identity: TrackIdentity, positionSecs = 0): void {
+  const key = keyFor(identity);
+  if (!key) return;
+  rememberMeta(key, identity);
+  if (session && session.trackId !== identity.trackId) settleSession();
+  if (session) return;
+  session = {
+    trackId: identity.trackId,
+    key,
+    secs: 0,
+    pos: Number.isFinite(positionSecs) ? positionSecs : 0,
+    dur: durationOf(identity, key),
+    counted: false,
+  };
+  dirty = true;
+  scheduleFlush();
+}
+
+/** 停止 / 队列播完：把当前会话收尾（没听满就不记） */
+export function noteTrackEnd(): void {
+  settleSession();
+}
 
 /**
  * 进度事件（约 800ms 一次，仅播放中发送）：用相邻两次位置差累加真实收听秒数。
  * 只接受 0.05~3 秒的向前小步，拖进度条、切歌、设备恢复造成的大跳变一律丢弃。
+ * 这一次累计听够整首时长（扣掉量化余量）时，记一次**完整收听**。
  */
 export function noteProgress(identity: TrackIdentity, positionSecs: number): void {
   if (!Number.isFinite(positionSecs)) return;
-  if (identity.trackId !== lastTrackId) {
-    lastTrackId = identity.trackId;
-    lastPos = positionSecs;
-    return;
-  }
-  const delta = positionSecs - lastPos;
-  lastPos = positionSecs;
-  if (!(delta > 0.05) || delta > 3) return;
   const key = keyFor(identity);
   if (!key) return;
+
+  // 没有会话（热重载、启动时错过了 state 事件）：从这一帧起算，不补记之前的
+  if (!session) {
+    session = {
+      trackId: identity.trackId,
+      key,
+      secs: 0,
+      pos: positionSecs,
+      dur: durationOf(identity, key),
+      counted: false,
+    };
+    return;
+  }
+  // 上一首迟到的进度帧：直接丢掉，别把当前这首的会话挤掉（否则会少记一次）
+  if (session.trackId !== identity.trackId) return;
+
+  const s = session;
+  if (s.dur <= 0) s.dur = durationOf(identity, key);
+
+  // 播放头大幅回退 = 单曲循环又回到开头（小回退只是拖进度条）：上一遍收尾，重新开一遍
+  if (s.dur > 0 && s.pos - positionSecs >= s.dur * 0.5) {
+    const dur = s.dur;
+    settleSession();
+    session = {
+      trackId: identity.trackId,
+      key,
+      secs: 0,
+      pos: positionSecs,
+      dur,
+      counted: false,
+    };
+    return;
+  }
+
+  const delta = positionSecs - s.pos;
+  s.pos = positionSecs;
+  if (!(delta > 0.05) || delta > 3) return;
+
   if (!live.tracks[key]) rememberMeta(key, identity);
   const day = ensureDay(dayKey(new Date()));
   day.s += delta;
@@ -571,6 +665,9 @@ export function noteProgress(identity: TrackIdentity, positionSecs: number): voi
   dirty = true;
   bindLifecycle();
   scheduleFlush();
+
+  s.secs += delta;
+  if (!s.counted && s.dur > 0 && s.secs >= s.dur - completeTolerance(s.dur)) countCompletion(s);
 }
 
 // ---------- 聚合 ----------

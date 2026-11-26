@@ -1,7 +1,9 @@
 [package]
 name = "oberon"
-version = "0.4.19"
+version = "0.4.20"
 description = "Oberon（Tauri 2 桌面内核）"
+license = "MIT"
+repository = "https://github.com/ajusbaby/Oberon-Music"
 edition = "2021"
 
 [lib]

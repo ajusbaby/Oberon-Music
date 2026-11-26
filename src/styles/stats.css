@@ -201,35 +201,6 @@
   white-space: nowrap;
 }
 
-/* ---------- 两项指标 ---------- */
-
-.stats-metrics {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid var(--ob-border-subtle);
-}
-
-.stats-metric + .stats-metric {
-  padding-left: 24px;
-  border-left: 1px solid var(--ob-border-subtle);
-}
-
-.stats-metric-label {
-  font-size: 13px;
-  color: var(--ob-text-secondary);
-}
-
-.stats-metric-value {
-  margin-top: 4px;
-  font-size: 26px;
-  font-weight: 620;
-  letter-spacing: -0.01em;
-  color: var(--ob-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
 /* ---------- 歌曲明细 ---------- */
 
 .stats-songs-head {
@@ -333,6 +304,13 @@
   font-size: 11.5px;
   color: var(--ob-text-tertiary);
   font-variant-numeric: tabular-nums;
+}
+
+/* 听过但一次都没听完整：用更轻的口气标一下，免得空着像漏了数据 */
+.stats-row-plays.is-pending {
+  opacity: 0.72;
+  font-size: 11px;
+  letter-spacing: 0.02em;
 }
 
 .stats-more {

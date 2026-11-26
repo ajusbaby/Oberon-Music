@@ -77,8 +77,18 @@ export function StatsTrackList({ rows }: StatsTrackListProps) {
               </span>
             </span>
             <span className="stats-row-side">
-              <span className="stats-row-duration">{row.secs > 0 ? fmtDuration(row.secs) : "—"}</span>
-              <span className="stats-row-plays">{row.plays > 0 ? row.plays + " 次" : ""}</span>
+              <span className="stats-row-duration" title="这首歌累计收听的时长">
+                {row.secs > 0 ? fmtDuration(row.secs) : "—"}
+              </span>
+              {row.plays > 0 ? (
+                <span className="stats-row-plays" title="完整听完的次数，听到一半切走的不算">
+                  {row.plays} 次
+                </span>
+              ) : row.secs > 0 ? (
+                <span className="stats-row-plays is-pending" title="听过，但还没有一次完整听完">
+                  未听完
+                </span>
+              ) : null}
             </span>
           </div>
         );
