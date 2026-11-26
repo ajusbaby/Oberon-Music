@@ -6,6 +6,8 @@ src-tauri/gen/
 .vscode/
 *.log
 .build/
+# 更新签名密钥的本地备份（私钥，绝不入库）
+/updater-keys/
 
 # 本地文档与设计稿：仓库只保留软件本体（这些文件仍留在本地）
 /docs/
